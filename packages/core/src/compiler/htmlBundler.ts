@@ -64,7 +64,7 @@ import { readDeclaredDefaults } from "../runtime/getVariables";
 import {
   ensureExternalLinkTag,
   inlineSubCompositions,
-  refuseSwapsReachedByRootScripts,
+  refuseScenesReachedByRootScripts,
 } from "./inlineSubCompositions";
 import { isSafePath, resolveWithinProject } from "../safePath.js";
 import { ensureHfIds } from "@hyperframes/parsers/hf-ids";
@@ -1154,7 +1154,7 @@ async function bundleProject(projectDir: string, options?: BundleOptions): Promi
       );
     },
   });
-  refuseSwapsReachedByRootScripts(document, rootScripts);
+  refuseScenesReachedByRootScripts(document, rootScripts);
   const styleRuns: PartRun<CompositionStyle>[] = [];
   subCompResult.styles.forEach((style, i) =>
     pushRun(styleRuns, subCompResult.styleScenes[i], style),

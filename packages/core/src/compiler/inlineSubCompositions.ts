@@ -45,7 +45,7 @@ import {
   planCompositionAssembly,
   extractedCompositionAssets,
 } from "./compositionAssembly";
-import { SCENE_NO_SWAP_ATTR, SCENE_PART_ATTR } from "../sceneParts";
+import { SCENE_EAGER_ATTR, SCENE_NO_SWAP_ATTR, SCENE_PART_ATTR } from "../sceneParts";
 
 // Anything a scene script can leave running, pending or registered outside its timeline, or that
 // throws when run again: only the timeline is torn down when a scene is swapped, so when unsure, refuse.
@@ -64,6 +64,17 @@ function sceneScriptSwapRefusal(script: string): string | null {
   return match ? `its script uses ${match[0].trim()}` : null;
 }
 
+// What ties a scene script to boot order: reaching outside its root, or leaving state on window for
+// other scripts (the timeline registry aside).
+const REACHES_OUTSIDE_RE =
+  /\b(documentElement|getElementsBy\w+|__hf[A-Z]\w*)\b|document\s*\.\s*(head|body)\b|querySelector(All)?\(\s*["'](head|body)["']|defineProperty\s*\(\s*(window|globalThis|self|document)\b|\b(window|globalThis|self)\s*(\.\s*(?!__timelines\b)[A-Za-z_$][\w$]*|\[[^\]]*\])\s*=(?!=)/;
+
+/** Why an authored scene script must run at boot rather than when the playhead nears, or null. */
+function sceneScriptEagerReason(script: string): string | null {
+  const match = REACHES_OUTSIDE_RE.exec(script);
+  return match ? `its script uses ${match[0].trim()}` : null;
+}
+
 // A quoted string in a script, in any of the three quote styles.
 const STRING_LITERAL_RE = /(["'`])((?:\\.|(?!\1)[^\\\n])*?)\1/g;
 // Text ending where createElement takes its tag: that string makes a node, it selects none.
@@ -73,8 +84,9 @@ const isNotASelector = (script: string, at: number, literal: string) =>
   CREATES_ELEMENT_RE.test(script.slice(Math.max(0, at - 60), at)) ||
   (literal.trim() === "*" && /,\s*$/.test(script.slice(Math.max(0, at - 20), at)));
 
-/** Marks each scene whose nodes a script outside it names by selector, id or class: a swap would strand it. */
-export function refuseSwapsReachedByRootScripts(document: Document, rootScripts: string[]): void {
+/** Marks each scene whose nodes a script outside it names by selector, id or class: a swap would
+ * strand it, and its own scripts must have run before that script does. */
+export function refuseScenesReachedByRootScripts(document: Document, rootScripts: string[]): void {
   const hosts = [...document.querySelectorAll(`[${SCENE_PART_ATTR}]`)];
   const byName = new Map<string, Set<Element>>();
   for (const host of hosts) {
@@ -110,7 +122,9 @@ export function refuseSwapsReachedByRootScripts(document: Document, rootScripts:
     ),
   );
   for (const literal of literals) {
-    const open = hosts.filter((host) => !host.hasAttribute(SCENE_NO_SWAP_ATTR));
+    const open = hosts.filter(
+      (host) => !host.hasAttribute(SCENE_NO_SWAP_ATTR) || !host.hasAttribute(SCENE_EAGER_ATTR),
+    );
     if (open.length === 0) return;
     // Tag names match in any case; ids and classes do not.
     const reached =
@@ -126,8 +140,9 @@ export function refuseSwapsReachedByRootScripts(document: Document, rootScripts:
             ? open.filter((host) => reaches(host, literal))
             : [];
     for (const host of reached)
-      if (!host.hasAttribute(SCENE_NO_SWAP_ATTR))
-        host.setAttribute(SCENE_NO_SWAP_ATTR, `a script outside the scene selects ${literal}`);
+      for (const attr of [SCENE_NO_SWAP_ATTR, SCENE_EAGER_ATTR])
+        if (!host.hasAttribute(attr))
+          host.setAttribute(attr, `a script outside the scene selects ${literal}`);
   }
 }
 
@@ -346,6 +361,7 @@ export function inlineSubCompositions(
   const svgIdScopes: Array<SvgIdScope & { styleStart: number; styleEnd: number }> = [];
 
   const sceneHosts = new Map<string, Element>();
+  const sceneLiterals = new Map<string, Set<string>>();
   const queue = hosts.map((element) => ({
     element,
     ancestry: [] as string[],
@@ -423,12 +439,13 @@ export function inlineSubCompositions(
       sceneHosts.set(scene, hostEl);
     }
     // Lazy, so renders (no scene hosts) never run the refusal checks.
-    const refuseSwap = (why: () => string | null) => {
+    const markScene = (attr: string, why: () => string | null) => {
       const host = scene ? sceneHosts.get(scene) : undefined;
-      if (!host || host.hasAttribute(SCENE_NO_SWAP_ATTR)) return;
+      if (!host || host.hasAttribute(attr)) return;
       const reason = why();
-      if (reason) host.setAttribute(SCENE_NO_SWAP_ATTR, reason);
+      if (reason) host.setAttribute(attr, reason);
     };
+    const refuseSwap = (why: () => string | null) => markScene(SCENE_NO_SWAP_ATTR, why);
 
     // Variable merging (bundler feature). Read declared defaults from the
     // document element (full-document sub-comps) AND the inner composition root
@@ -508,15 +525,21 @@ export function inlineSubCompositions(
       const externalSrc = resolveSubAssetPath(scriptEl.getAttribute("src"));
       const type = (scriptEl.getAttribute("type") || "").trim().toLowerCase();
       // A swap never re-runs external or module scripts: only a known library that just defines globals is safe.
-      refuseSwap(() =>
+      const authored = scriptEl.textContent || "";
+      const unknownCode =
         type === "importmap" || type === "module"
           ? "it runs a module script or import map"
-          : !externalSrc
-            ? sceneScriptSwapRefusal(scriptEl.textContent || "")
-            : isSwapSafeLibrary(externalSrc)
-              ? null
-              : "it runs a script that is not a known library",
+          : externalSrc && !isSwapSafeLibrary(externalSrc)
+            ? "it runs a script that is not a known library"
+            : null;
+      refuseSwap(() => unknownCode ?? (externalSrc ? null : sceneScriptSwapRefusal(authored)));
+      markScene(
+        SCENE_EAGER_ATTR,
+        () => unknownCode ?? (externalSrc ? null : sceneScriptEagerReason(authored)),
       );
+      if (scene && !externalSrc && !unknownCode)
+        for (const m of authored.matchAll(STRING_LITERAL_RE))
+          sceneLiterals.set(scene, (sceneLiterals.get(scene) ?? new Set()).add(m[2] ?? ""));
       if (type === "importmap") {
         const map = parseImportMap(scriptEl.textContent || "", (url) => {
           // The rebase drops a leading "./" and a trailing "/"; an import map address needs both.
@@ -704,6 +727,8 @@ export function inlineSubCompositions(
     }
   });
 
+  keepScenesNamingOthersEager(sceneHosts, sceneLiterals);
+
   const rootReferences = readSvgReferenceAliases(
     document.documentElement,
     SVG_REFERENCE_ALIASES_ATTR,
@@ -727,4 +752,28 @@ export function inlineSubCompositions(
     importMaps,
     moduleScripts,
   };
+}
+
+/** A scene script that names another scene's composition id reads what that scene's script left. */
+function keepScenesNamingOthersEager(
+  sceneHosts: Map<string, Element>,
+  sceneLiterals: Map<string, Set<string>>,
+): void {
+  const idsOf = (host: Element) =>
+    new Set(
+      [host, ...host.querySelectorAll("[data-composition-id]")].map(
+        (el) => el.getAttribute("data-composition-id") ?? "",
+      ),
+    );
+  const ids = new Map([...sceneHosts].map(([scene, host]) => [scene, idsOf(host)]));
+  for (const [scene, literals] of sceneLiterals) {
+    const host = sceneHosts.get(scene);
+    const own = ids.get(scene);
+    if (!host || !own || host.hasAttribute(SCENE_EAGER_ATTR)) continue;
+    const named = [...literals].find(
+      (literal) =>
+        literal && !own.has(literal) && [...ids.values()].some((other) => other.has(literal)),
+    );
+    if (named) host.setAttribute(SCENE_EAGER_ATTR, `its script names ${named}`);
+  }
 }

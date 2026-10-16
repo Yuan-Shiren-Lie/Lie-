@@ -3279,6 +3279,43 @@ describe("bundleToSingleHtml sceneParts", () => {
     expect(styleText(doc.documentElement.outerHTML).match(/@import/g)).toHaveLength(1);
   });
 
+  it("keeps a scene eager when its script reaches outside its root or leaves state on window", async () => {
+    const scene = (id: string, script: string, type = "") =>
+      `<template id="${id}-template"><div data-composition-id="${id}"><p class="${id}-text">${id}</p>
+  <script${type}>${script}</script></div></template>`;
+    const dir = makeTempProject({
+      "index.html": `<!doctype html><html><head></head><body>
+  <div data-composition-id="main" data-width="1920" data-height="1080" data-duration="12">
+${["a", "b", "c", "d", "e", "f"].map((id, i) => `    <div data-composition-id="${id}" data-composition-src="compositions/${id}.html" data-start="${i * 2}" data-duration="2"></div>`).join("\n")}
+  </div>
+  <script>document.querySelector(".f-text");</script></body></html>`,
+      "compositions/a.html": scene(
+        "a",
+        'window.__timelines = window.__timelines || {}; window.__timelines["a"] = gsap.timeline(); document.querySelector("canvas")?.getContext("2d");',
+      ),
+      "compositions/b.html": scene("b", "window.__bSeq = (window.__bSeq || 0) + 1;"),
+      "compositions/c.html": scene("c", "document.documentElement.style.color = 'red';"),
+      "compositions/d.html": scene("d", 'window.__timelines["a"].progress(1);'),
+      "compositions/e.html": scene("e", "export {};", ' type="module"'),
+      "compositions/f.html": scene("f", ""),
+    });
+    const doc = parseHTML(await bundleToSingleHtml(dir, { sceneParts: true })).document;
+    const eager = (id: string) =>
+      doc.querySelector(`div[data-hf-scene="${id}"]`)?.getAttribute("data-hf-scene-eager");
+    expect(["a", "b", "c", "d", "e", "f"].map(eager)).toEqual([
+      null,
+      "its script uses window.__bSeq =",
+      "its script uses documentElement",
+      "its script names a",
+      "it runs a module script or import map",
+      "a script outside the scene selects .f-text",
+    ]);
+    // Swap refusals are their own: a canvas scene cannot swap, yet it can wait for the playhead.
+    expect(doc.querySelector('div[data-hf-scene="a"]')?.getAttribute("data-hf-scene-no-swap")).toBe(
+      "its script uses getContext",
+    );
+  });
+
   it("marks a scene whose own script leaves work running as not swappable, and only that scene", async () => {
     const dir = makeTempProject({
       "index.html": `<!doctype html><html><head>
