@@ -82,8 +82,9 @@ const PARAKEET_MODEL_FILES: readonly ModelFile[] = [
   },
 ];
 
-/** At least 30 minutes, and twice the audio length for slow CPUs. */
-const decodeTimeoutMs = (audioSeconds: number) => Math.max(1_800_000, audioSeconds * 2000);
+/** At least 30 minutes, twice the audio length for slow CPUs; whole ms, within Node's timer limit. */
+export const decodeTimeoutMs = (audioSeconds: number) =>
+  Math.min(2 ** 31 - 1, Math.max(1_800_000, Math.ceil(audioSeconds * 2000)));
 
 /** The platforms sherpa-onnx-node publishes a native package for. */
 const SUPPORTED_TARGETS = [

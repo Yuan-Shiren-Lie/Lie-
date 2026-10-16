@@ -1026,14 +1026,46 @@
     return { x: objectPositionOffset(x, freeX), y: objectPositionOffset(y, freeY) };
   }
 
-  // Return the alpha painted by an <img> at a viewport point. `null` means the
-  // browser would not let us inspect the image (not loaded or cross-origin), in
-  // which case callers preserve the conservative opaque fallback.
-  function imageAlphaAt(element, x, y) {
-    const sourceWidth = element.naturalWidth;
-    const sourceHeight = element.naturalHeight;
+  const IDENTITY_FLIP = { flipX: false, flipY: false };
+
+  // 2D CSS matrix components [a, b, c, d], or null when the transform is 3D or unparsed.
+  function transformMatrix(value) {
+    if (!value || value === "none") return [1, 0, 0, 1];
+    const match = /^matrix\(([^)]*)\)$/.exec(value.trim());
+    if (!match) return null;
+    const parts = match[1].split(",").map(Number);
+    return parts.length === 6 && parts.every(Number.isFinite) ? parts.slice(0, 4) : null;
+  }
+
+  // Which axes the element's paint is mirrored on, or null when a rotation, skew or 3D transform
+  // (on it or an ancestor) means its bounding box no longer maps axis-aligned onto its pixels.
+  function paintFlips(element) {
+    let flipX = false;
+    let flipY = false;
+    for (let current = element; current; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      const matrix = transformMatrix(style.transform);
+      if (!matrix) return null;
+      const [a, b, c, d] = matrix;
+      if (Math.abs(b) > 1e-6 || Math.abs(c) > 1e-6) return null;
+      if (style.rotate && style.rotate !== "none" && parseFloat(style.rotate) !== 0) return null;
+      const scale = String(style.scale || "none")
+        .trim()
+        .split(/\s+/)
+        .map(Number);
+      const scaleX = Number.isFinite(scale[0]) ? scale[0] : 1;
+      const scaleY = Number.isFinite(scale[1]) ? scale[1] : scaleX;
+      if (a * scaleX < 0) flipX = !flipX;
+      if (d * scaleY < 0) flipY = !flipY;
+    }
+    return flipX || flipY ? { flipX, flipY } : IDENTITY_FLIP;
+  }
+
+  function paintedSourceMapping(element, sourceWidth, sourceHeight) {
     const rect = element.getBoundingClientRect();
     if (!sourceWidth || !sourceHeight || !rect.width || !rect.height) return null;
+    const flips = paintFlips(element);
+    if (!flips) return null;
 
     const style = getComputedStyle(element);
     const fit = style.objectFit || "fill";
@@ -1061,9 +1093,48 @@
       rect.width - paintedWidth,
       rect.height - paintedHeight,
     );
-    const localX = x - rect.left - offsets.x;
-    const localY = y - rect.top - offsets.y;
-    if (localX < 0 || localY < 0 || localX >= paintedWidth || localY >= paintedHeight) return 0;
+    return {
+      rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+      offsets,
+      ...flips,
+      paintedWidth,
+      paintedHeight,
+      scaleX,
+      scaleY,
+      sourceWidth,
+      sourceHeight,
+    };
+  }
+
+  // The source pixel painted at a viewport point, or null outside the painted content box.
+  function sourcePixelAt(mapping, x, y) {
+    const { rect, offsets } = mapping;
+    const localX = (mapping.flipX ? rect.right - x : x - rect.left) - offsets.x;
+    const localY = (mapping.flipY ? rect.bottom - y : y - rect.top) - offsets.y;
+    if (
+      localX < 0 ||
+      localY < 0 ||
+      localX >= mapping.paintedWidth ||
+      localY >= mapping.paintedHeight
+    ) {
+      return null;
+    }
+    return {
+      x: Math.min(mapping.sourceWidth - 1, Math.max(0, Math.floor(localX / mapping.scaleX))),
+      y: Math.min(mapping.sourceHeight - 1, Math.max(0, Math.floor(localY / mapping.scaleY))),
+    };
+  }
+
+  // Return the alpha painted by an <img> at a viewport point. `null` means the
+  // browser would not let us inspect the image (not loaded or cross-origin), in
+  // which case callers preserve the conservative opaque fallback.
+  function imageAlphaAt(element, x, y) {
+    const sourceWidth = element.naturalWidth;
+    const sourceHeight = element.naturalHeight;
+    const mapping = paintedSourceMapping(element, sourceWidth, sourceHeight);
+    if (!mapping) return null;
+    const pixel = sourcePixelAt(mapping, x, y);
+    if (!pixel) return 0;
 
     try {
       let cached = imageAlphaCanvases.get(element);
@@ -1083,12 +1154,114 @@
         cached = { context, width: sourceWidth, height: sourceHeight, source };
         imageAlphaCanvases.set(element, cached);
       }
-      const sourceX = Math.min(sourceWidth - 1, Math.max(0, Math.floor(localX / scaleX)));
-      const sourceY = Math.min(sourceHeight - 1, Math.max(0, Math.floor(localY / scaleY)));
-      return cached.context.getImageData(sourceX, sourceY, 1, 1).data[3] / 255;
+      return cached.context.getImageData(pixel.x, pixel.y, 1, 1).data[3] / 255;
     } catch {
       return null;
     }
+  }
+
+  const OCCLUDING_ALPHA = 0.6;
+  const VIDEO_ALPHA_MAX_SIDE = 480;
+  let videoAlphaFrames = new Map();
+  let videoAlphaScratch = null;
+
+  function videoAlphaContext(width, height) {
+    if (!videoAlphaScratch) {
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (!context) return null;
+      videoAlphaScratch = { canvas, context };
+    }
+    videoAlphaScratch.canvas.width = width;
+    videoAlphaScratch.canvas.height = height;
+    return videoAlphaScratch.context;
+  }
+
+  // Read once per audit call, so per sample time, and only for a video some text probe lands under.
+  function videoAlphaFrame(video) {
+    let frame = videoAlphaFrames.get(video);
+    if (!frame) {
+      frame = readVideoAlphaFrame(video);
+      videoAlphaFrames.set(video, frame);
+    }
+    return frame;
+  }
+
+  function unreadVideoFrame(reason) {
+    return { kind: "unread", reason };
+  }
+
+  // "opaque" keeps a video's whole box occluding; "matte" judges each point by the decoded
+  // frame's alpha; "unread" falls back to opaque and is reported, never guessed.
+  function readVideoAlphaFrame(video) {
+    if (video.seeking) return unreadVideoFrame("the seek had not landed");
+    if (video.readyState < 2) return unreadVideoFrame("no frame was decoded at this time");
+    if (!video.videoWidth || !video.videoHeight)
+      return unreadVideoFrame("the video has no frame size");
+    const mapping = paintedSourceMapping(video, video.videoWidth, video.videoHeight);
+    if (!mapping) return unreadVideoFrame("it is rotated, skewed or transformed in 3D");
+    const downscale = Math.min(
+      1,
+      VIDEO_ALPHA_MAX_SIDE / Math.max(mapping.sourceWidth, mapping.sourceHeight),
+    );
+    const width = Math.max(1, Math.round(mapping.sourceWidth * downscale));
+    const height = Math.max(1, Math.round(mapping.sourceHeight * downscale));
+    let rgba;
+    try {
+      const context = videoAlphaContext(width, height);
+      if (!context) return unreadVideoFrame("no 2D canvas was available");
+      context.clearRect(0, 0, width, height);
+      context.drawImage(video, 0, 0, width, height);
+      rgba = context.getImageData(0, 0, width, height).data;
+    } catch (error) {
+      return unreadVideoFrame(
+        error && error.name === "SecurityError"
+          ? "its source is cross-origin"
+          : "its frame could not be drawn",
+      );
+    }
+    return classifyVideoAlpha(rgba, width, height, mapping, opacityChain(video));
+  }
+
+  function classifyVideoAlpha(rgba, width, height, mapping, opacity) {
+    const alpha = new Uint8Array(width * height);
+    let clear = 0;
+    let painted = 0;
+    for (let index = 0; index < alpha.length; index++) {
+      alpha[index] = rgba[index * 4 + 3];
+      if (alpha[index] < OCCLUDING_ALPHA * 255) clear += 1;
+      if (alpha[index] > 0) painted += 1;
+    }
+    if (clear === 0) return { kind: "opaque" };
+    if (painted === 0) return unreadVideoFrame("its frame read back fully transparent");
+    return {
+      kind: "matte",
+      alpha,
+      width,
+      height,
+      opacity,
+      mapping: {
+        ...mapping,
+        sourceWidth: width,
+        sourceHeight: height,
+        scaleX: mapping.paintedWidth / width,
+        scaleY: mapping.paintedHeight / height,
+      },
+    };
+  }
+
+  function matteOccludesAt(frame, x, y) {
+    const pixel = sourcePixelAt(frame.mapping, x, y);
+    if (!pixel) return false;
+    return (frame.alpha[pixel.y * frame.width + pixel.x] / 255) * frame.opacity >= OCCLUDING_ALPHA;
+  }
+
+  // A video with an opaque CSS background paints that background behind its clear pixels.
+  function matteFrameFor(element) {
+    if (element.tagName !== "VIDEO") return null;
+    if (hasOpaqueBackground(getComputedStyle(element))) return null;
+    const frame = videoAlphaFrame(element);
+    return frame.kind === "matte" ? frame : null;
   }
 
   // An element hides text beneath it when it paints opaque pixels at near-full
@@ -1096,12 +1269,14 @@
   // background colour. Low-opacity overlays (grain, scrims) do not occlude.
   function isOpaqueOccluder(element, x, y) {
     const opacity = opacityChain(element);
-    if (opacity < 0.6) return false;
+    if (opacity < OCCLUDING_ALPHA) return false;
     if (IGNORE_TAGS.has(element.tagName)) return false;
     if (element.tagName === "IMG") {
       const alpha = imageAlphaAt(element, x, y);
-      if (alpha !== null) return alpha * opacity >= 0.6;
+      if (alpha !== null) return alpha * opacity >= OCCLUDING_ALPHA;
     }
+    const matte = matteFrameFor(element);
+    if (matte) return matteOccludesAt(matte, x, y);
     if (RASTER_TAGS.has(element.tagName)) return true;
     return hasOpaqueBackground(getComputedStyle(element));
   }
@@ -1150,7 +1325,7 @@
   // there is related to the text, non-opaque, sharing a 3D context with it, or
   // part of a transient crossfade overlap.
   // fallow-ignore-next-line complexity
-  function occluderAt(element, x, y) {
+  function occluderAt(element, x, y, seenMattes) {
     // Walk the paint-ordered stack: a transparent layer on top must not mask an opaque one below it.
     const stack =
       typeof document.elementsFromPoint === "function"
@@ -1163,6 +1338,8 @@
       // Pair-specific exemptions excuse this hit only; keep walking for deeper occluders.
       if (sharedPreserve3d(element, hit)) continue;
       if (isCrossSceneTransitionOverlap(element, hit)) continue;
+      const matte = seenMattes && matteFrameFor(hit);
+      if (matte && !seenMattes.has(matte)) seenMattes.set(matte, hit);
       if (isOpaqueOccluder(hit, x, y)) return hit;
     }
     return null;
@@ -1196,21 +1373,162 @@
   function occlusionCoverage(element, textRects) {
     let occluder = null;
     let hits = 0;
+    let opaqueHits = 0;
+    // Every matte above the text, including where its alpha is clear: a feature narrower than the
+    // probe grid (an arm, a mic stand) can hide a word between two probe columns.
+    const seenMattes = new Map();
     for (const textRect of textRects) {
       for (const yFraction of OCCLUSION_PROBE_Y_FRACTIONS) {
         const y = textRect.top + textRect.height * yFraction;
         for (const xFraction of OCCLUSION_PROBE_X_FRACTIONS) {
-          const hit = occluderAt(element, textRect.left + textRect.width * xFraction, y);
+          const x = textRect.left + textRect.width * xFraction;
+          const hit = occluderAt(element, x, y, seenMattes);
           if (!hit) continue;
           hits += 1;
           if (!occluder) occluder = hit;
+          if (!matteFrameFor(hit)) opaqueHits += 1;
         }
       }
     }
+    const judgeByMatte = opaqueHits === 0 && seenMattes.size > 0;
     return {
-      occluder,
+      occluder: occluder || (judgeByMatte ? seenMattes.values().next().value : null),
       coveredFraction: round(hits / (OCCLUSION_GRID_POINTS * textRects.length)),
+      mattes: judgeByMatte ? [...seenMattes.keys()] : [],
     };
+  }
+
+  // Thresholds from measuring rendered words against real subject mattes: a word reads as
+  // deliberately tucked behind the subject at 30-55% covered, and is lost at 80%, or when it
+  // and its neighbour are both half covered.
+  const MATTE_WORD_LOST_COVERAGE = 0.8;
+  const MATTE_PAIR_LOST_COVERAGE = 0.5;
+  const MATTE_MAX_SAMPLES_PER_AXIS = 48;
+
+  function wordClientRects(element) {
+    const words = [];
+    for (const node of directTextNodes(element)) {
+      for (const match of (node.textContent || "").matchAll(/\S+/g)) {
+        const range = document.createRange();
+        range.setStart(node, match.index);
+        range.setEnd(node, match.index + match[0].length);
+        const rects = Array.from(range.getClientRects()).filter(
+          (rect) => rect.width > 0.5 && rect.height > 0.5,
+        );
+        range.detach();
+        if (rects.length > 0) words.push({ word: match[0], rects });
+      }
+    }
+    return words;
+  }
+
+  function matteSampleCount(length, mattes) {
+    const pitch = Math.max(1, Math.min(...mattes.map((matte) => matte.mapping.scaleX)));
+    return Math.max(1, Math.min(MATTE_MAX_SAMPLES_PER_AXIS, Math.ceil(length / pitch)));
+  }
+
+  // Area-weighted share of the rects under any matte's occluding alpha, sampled at the matte's resolution.
+  function matteCoverage(rects, mattes) {
+    let coveredArea = 0;
+    let totalArea = 0;
+    for (const rect of rects) {
+      const cols = matteSampleCount(rect.width, mattes);
+      const rows = matteSampleCount(rect.height, mattes);
+      let covered = 0;
+      for (let row = 0; row < rows; row++) {
+        const y = rect.top + ((row + 0.5) * rect.height) / rows;
+        for (let col = 0; col < cols; col++) {
+          const x = rect.left + ((col + 0.5) * rect.width) / cols;
+          if (mattes.some((matte) => matteOccludesAt(matte, x, y))) covered += 1;
+        }
+      }
+      const area = rect.width * rect.height;
+      coveredArea += (area * covered) / (rows * cols);
+      totalArea += area;
+    }
+    return totalArea > 0 ? round(coveredArea / totalArea) : 0;
+  }
+
+  function lostNeighbourPair(words) {
+    for (let index = 1; index < words.length; index++) {
+      const pair = [words[index - 1], words[index]];
+      if (pair.every((word) => word.coverage >= MATTE_PAIR_LOST_COVERAGE)) return pair;
+    }
+    return null;
+  }
+
+  function percent(fraction) {
+    return `${Math.round(fraction * 100)}%`;
+  }
+
+  function lostWordsMessage(lostWord, pair) {
+    if (lostWord) {
+      return `"${lostWord.word}" is ${percent(lostWord.coverage)} behind a transparent video's matte.`;
+    }
+    return `Neighbouring words "${pair[0].word}" and "${pair[1].word}" are ${percent(pair[0].coverage)} and ${percent(pair[1].coverage)} behind a transparent video's matte.`;
+  }
+
+  function markMatteWordsLost(issue, lostWord, pair) {
+    issue.severity = "error";
+    issue.message = lostWordsMessage(lostWord, pair);
+    issue.fixHint =
+      "Move or resize the text so no word is 80% behind the matte and no two neighbouring words are each half behind it, or mark intentional layering with data-layout-allow-occlusion.";
+  }
+
+  // Text behind a cutout is judged per rendered word against the decoded alpha: partial cover is
+  // reported as info with its share, a lost word is an error.
+  function matteOcclusionIssue(element, time, textRect, text, occluder, mattes) {
+    const words = wordClientRects(element).map(({ word, rects }) => ({
+      word,
+      coverage: matteCoverage(rects, mattes),
+    }));
+    if (words.length === 0) return null;
+    const peak = words.reduce((top, word) => (word.coverage > top.coverage ? word : top));
+    if (peak.coverage <= 0) return null;
+    const issue = {
+      code: "text_occluded",
+      severity: "info",
+      time,
+      selector: uniqueSelectorFor(element),
+      containerSelector: uniqueSelectorFor(occluder),
+      text,
+      message: `Text sits partly behind a transparent video's matte; its most covered word "${peak.word}" is ${percent(peak.coverage)} hidden.`,
+      rect: textRect,
+      coveredFraction: peak.coverage,
+    };
+    const lostWord = peak.coverage >= MATTE_WORD_LOST_COVERAGE ? peak : null;
+    const pair = lostNeighbourPair(words);
+    if (lostWord || pair) markMatteWordsLost(issue, lostWord, pair);
+    return { issue, first: words[0], last: words[words.length - 1] };
+  }
+
+  // Captions often render one word per element, so the neighbour rule also spans sibling elements.
+  function markLostSiblingWords(matteResults) {
+    for (const [element, result] of matteResults) {
+      const next = element.nextElementSibling && matteResults.get(element.nextElementSibling);
+      if (!next) continue;
+      const pair = [result.last, next.first];
+      if (!pair.every((word) => word.coverage >= MATTE_PAIR_LOST_COVERAGE)) continue;
+      for (const { issue } of [result, next]) {
+        if (issue.severity !== "error") markMatteWordsLost(issue, null, pair);
+      }
+    }
+  }
+
+  function unreadVideoIssues(time) {
+    const issues = [];
+    for (const [video, frame] of videoAlphaFrames) {
+      if (frame.kind !== "unread") continue;
+      issues.push({
+        code: "video_alpha_unread",
+        severity: "info",
+        time,
+        selector: uniqueSelectorFor(video),
+        message: `Could not read this video's frame alpha (${frame.reason}), so text under it was judged as if the video were opaque.`,
+        rect: toRect(video.getBoundingClientRect()),
+      });
+    }
+    return issues;
   }
 
   // pointer-events:none hides elements from elementFromPoint — both probed text AND occluders.
@@ -1240,18 +1558,23 @@
   }
 
   // text_occluded: atomic labels flag at any hit; prose needs coveredFraction >= proseCoverageFloor (default 0.15).
-  function occludedTextIssue(element, time, proseCoverageFloor) {
+  function occludedTextIssue(element, time, proseCoverageFloor, matteResults) {
     if (hasAllowOcclusionFlag(element)) return null;
     if (!hasVisibleTextInk(element)) return null;
     const textRect = textRectFor(element, true);
     if (!textRect) return null;
     const textRects = textClientRects(element, true);
     const text = textContentFor(element, true);
-    const { occluder, coveredFraction } = occlusionCoverage(
+    const { occluder, coveredFraction, mattes } = occlusionCoverage(
       element,
       textRects.length > 0 ? textRects : [textRect],
     );
     if (!occluder) return null;
+    if (mattes.length > 0) {
+      const result = matteOcclusionIssue(element, time, textRect, text, occluder, mattes);
+      if (result) matteResults.set(element, result);
+      return result ? result.issue : null;
+    }
     if (!isAtomicLabel(text) && coveredFraction < proseCoverageFloor) return null;
     return {
       code: "text_occluded",
@@ -2015,6 +2338,8 @@
       isVisibleElement(element, 0.05),
     );
     const issues = [];
+    const matteResults = new Map();
+    videoAlphaFrames = new Map();
 
     const restoreHits = restoreHitTesting(root);
     try {
@@ -2023,7 +2348,7 @@
         const clipped = clippedTextIssue(element, time, tolerance);
         if (clipped) issues.push(clipped);
         issues.push(...textOverflowIssues(element, root, rootRect, time, tolerance, clipped));
-        const occluded = occludedTextIssue(element, time, proseCoverageFloor);
+        const occluded = occludedTextIssue(element, time, proseCoverageFloor, matteResults);
         if (occluded) issues.push(occluded);
         const invisible = invisibleTextIssue(element, time);
         if (invisible) issues.push(invisible);
@@ -2031,6 +2356,8 @@
     } finally {
       restoreHits();
     }
+    markLostSiblingWords(matteResults);
+    issues.push(...unreadVideoIssues(time));
 
     issues.push(...containerOverflowIssues(root, time, tolerance));
     issues.push(...contentOverlapIssues(root, time));

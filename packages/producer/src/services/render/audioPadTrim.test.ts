@@ -334,6 +334,25 @@ describe("padOrTrimAudioToVideoFrameCount", () => {
     expect(correctionArgs[correctionArgs.indexOf("-t") + 1]).toBe("3.000000");
   });
 
+  it("keeps the end of a long correction failure, where ffmpeg says what went wrong", async () => {
+    const { input } = harness({
+      video: { frameCount: 90, fpsNum: 30, fpsDen: 1 },
+      audio: { durationSeconds: 3 },
+    });
+    const banner = Array.from({ length: 12 }, (_, i) => `  metadata line ${i}: value`).join("\n");
+    const cause = "Error while filtering: the real ffmpeg cause";
+    let runs = 0;
+    input.probeAudioTruePeakDbfs = async () => 1.5;
+    input.runFfmpeg = async () =>
+      ++runs === 1 ? { success: true } : { success: false, error: `[FFmpeg] ${banner}\n${cause}` };
+
+    const result = await padOrTrimAudioToVideoFrameCount(input);
+
+    expect(result.success).toBe(false);
+    expect(result.error!.length).toBeGreaterThan(240);
+    expect(result.error).toContain(cause);
+  });
+
   it("uses correction headroom to converge within three AAC passes", async () => {
     const dir = mkdtempSync(join(tmpdir(), "hf-aac-convergence-"));
     const corrections: number[] = [];

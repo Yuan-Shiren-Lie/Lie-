@@ -92,6 +92,11 @@ import {
   type HyperframesConfig,
 } from "../telemetry/config.js";
 import { renderJobObservabilityTelemetryPayload } from "../telemetry/renderObservability.js";
+import {
+  startRenderCpuSampler,
+  type RenderCpuSampler,
+  type RenderCpuTelemetryPayload,
+} from "../telemetry/renderCpu.js";
 import { bytesToMb } from "../telemetry/system.js";
 import { VERSION } from "../version.js";
 import { isDevMode } from "../utils/env.js";
@@ -783,6 +788,7 @@ async function renderDocker(
   await registerRenderOutputOrWarn(projectDir, outputPath);
   const capture = await captureArtifactRevision(projectDir).catch(() => undefined);
   const startTime = Date.now();
+  const cpu = startRenderCpuSampler();
 
   // Dev mode (tsx/ts-node) uses "latest" since the local version isn't on npm
   const dockerVersion = isDevMode() ? "latest" : VERSION;
@@ -796,6 +802,7 @@ async function renderDocker(
   try {
     imageTag = ensureDockerImage(dockerVersion, platform, options.quiet);
   } catch (error: unknown) {
+    cpu.stop();
     const failure = describeDockerBuildFailure(error);
     errorBox(failure.title, failure.message, failure.hint);
     failCommand();
@@ -861,10 +868,11 @@ async function renderDocker(
       child.on("error", (err) => reject(err));
     });
   } catch (error: unknown) {
-    handleRenderError(error, options, startTime, true, "Check Docker is running: docker info");
+    handleRenderError(error, options, startTime, cpu, true, "Check Docker is running: docker info");
   }
 
   const elapsed = Date.now() - startTime;
+  const cpuUsage = cpu.stop();
 
   // Docker child exited 0 → the containerized producer already validated
   // AND committed the artifact. Mirror renderLocal's post-success guarantee
@@ -892,6 +900,7 @@ async function renderDocker(
       ...renderOutputShapeTelemetryPayload(options),
       ...renderEnvironmentTelemetryPayload(options),
       ...getMemorySnapshot(),
+      ...cpuUsage,
     }),
   );
 
@@ -1058,6 +1067,7 @@ async function executeLocalRender(
         false;
 
   const startTime = Date.now();
+  const cpu = startRenderCpuSampler();
   const logger = createRenderTelemetryLogger(
     producer.createConsoleLogger?.(options.debug ? "debug" : options.quiet ? "warn" : "info") ??
       createNoopProducerLogger(),
@@ -1133,6 +1143,7 @@ async function executeLocalRender(
       error,
       options,
       startTime,
+      cpu,
       false,
       inContainer ? "" : "Try --docker for containerized rendering",
       job.failedStage,
@@ -1157,12 +1168,15 @@ async function executeLocalRender(
 
   maybeConsumeDeParallelRouterTrial(deParallelRouterActive, job, options.quiet);
   const elapsed = Date.now() - startTime;
+  const cpuUsage = cpu.stop();
   if (job.outcome === "completed_with_warnings") {
     for (const warning of job.warnings) {
       console.warn(c.warn(`  [${warning.code}] ${warning.message}`));
     }
   }
-  runPostRenderStep("trackRenderMetrics", () => trackRenderMetrics(job, elapsed, options, false));
+  runPostRenderStep("trackRenderMetrics", () =>
+    trackRenderMetrics(job, elapsed, options, false, cpuUsage),
+  );
   runPostRenderStep("printRenderComplete", () =>
     printRenderComplete({
       outputPath,
@@ -1700,6 +1714,7 @@ function handleRenderError(
   error: unknown,
   options: RenderOptions,
   startTime: number,
+  cpu: RenderCpuSampler,
   docker: boolean,
   hint: string,
   failedStage?: string,
@@ -1732,6 +1747,7 @@ function handleRenderError(
     failedStageCode: normalizeStageCode(failedStage || "pipeline"),
     ...renderJobObservabilityTelemetryPayload(job),
     ...getMemorySnapshot(),
+    ...cpu.stop(),
   });
   // Failed renders join the recent-renders ring too — a bug report filed via
   // `hyperframes feedback` is MOST likely to be about a failed render.
@@ -1786,6 +1802,7 @@ function trackRenderMetrics(
   elapsedMs: number,
   options: RenderOptions,
   docker: boolean,
+  cpuUsage: RenderCpuTelemetryPayload,
 ): void {
   // Successful render → recent-renders ring, so a later `hyperframes
   // feedback` can attach this render's telemetry id to the report.
@@ -1909,6 +1926,7 @@ function trackRenderMetrics(
     extractCacheMisses: extract?.cacheMisses,
     ...renderJobObservabilityTelemetryPayload(job),
     ...getMemorySnapshot(),
+    ...cpuUsage,
   });
 }
 

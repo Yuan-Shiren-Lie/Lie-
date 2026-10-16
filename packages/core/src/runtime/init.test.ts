@@ -1472,6 +1472,46 @@ describe("initSandboxRuntimeModular", () => {
       expect(earlyClip.style.visibility).toBe("hidden");
     });
 
+    it("shows only the full-frame <svg> clip whose window holds the seek", () => {
+      const root = buildRoot();
+      const SVG_NS = "http://www.w3.org/2000/svg";
+      const windows = [
+        [0, 4],
+        [4, 8],
+        [12, 8],
+      ];
+      const layers = windows.map(([start, duration]) => {
+        const svg = document.createElementNS(SVG_NS, "svg");
+        svg.setAttribute("data-start", String(start));
+        svg.setAttribute("data-duration", String(duration));
+        // A timed shape that outlives its layer must still go with it.
+        const shape = document.createElementNS(SVG_NS, "rect");
+        shape.setAttribute("data-start", "0");
+        shape.setAttribute("data-duration", "20");
+        svg.appendChild(shape);
+        root.appendChild(svg);
+        return { svg, shape };
+      });
+      window.__timelines = { main: createMockTimeline(20) };
+      initSandboxRuntimeModular();
+
+      for (const [time, shown] of [
+        [1, 0],
+        [5, 1],
+        [16, 2],
+      ]) {
+        window.__player?.renderSeek(time);
+        expect(
+          layers.map(({ svg }) => svg.style.visibility),
+          `layers at ${time}s`,
+        ).toEqual(layers.map((_, i) => (i === shown ? "visible" : "hidden")));
+        expect(
+          layers.map(({ shape }) => shape.style.visibility),
+          `shapes at ${time}s`,
+        ).toEqual(layers.map((_, i) => (i === shown ? "visible" : "hidden")));
+      }
+    });
+
     it("never shows two back-to-back clips at their shared boundary", () => {
       const root = buildRoot();
       const first = addClip(root, 0, 2.5);

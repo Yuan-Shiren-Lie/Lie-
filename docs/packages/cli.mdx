@@ -207,6 +207,25 @@ npx hyperframes capture https://example.com --json
   Fonts: sohne-var
 ```
 
+Website capture accepts public HTTP(S) destinations without URL credentials.
+Browser traffic goes through a per-capture proxy, and asset downloads use the
+same checked-address policy. Each connection uses a validated numeric IPv4
+address; redirects and later requests are checked again. Private, loopback,
+link-local and special-use addresses are refused. IPv6-only sites are currently
+unsupported. Plain WebSocket upgrades are refused; slow or refused resources
+may be absent from the capture.
+
+Capture uses a temporary browser profile with non-proxied WebRTC UDP disabled.
+The profile and proxy are removed when the browser closes. The Chromium sandbox
+is retained on macOS and Windows; Linux retains the container compatibility
+exception.
+
+Ancestor `.env` files can supply the supported vision API keys, models, Vertex
+credentials/location and vision timeout. They cannot change the browser path,
+executable discovery, TLS, proxy or process runtime settings. Set
+`HYPERFRAMES_NO_CAPTURE_DOTENV=1` in the calling environment to skip these files.
+An inherited `HYPERFRAMES_BROWSER_PATH` still selects a browser.
+
 `Dropped` is how many assets the page referenced that are **not** in the
 folder, and why. It is printed only when it is non-zero, and `--json` always
 carries it as a `dropped` object. Without it, a capture of a spare page and a
@@ -856,6 +875,21 @@ cover every finding from the full check.
 `--caption-zone` and `--frame-check` refuse a ranged check when none of their
 configured seek samples falls inside `--range`; a requested gate never silently
 passes without running.
+
+Text under a `<video>` is judged by the frame the video shows at that sample.
+An opaque video covers its whole box, as an opaque image does. A video with
+transparency, such as a `remove-background` cutout, covers only where its
+alpha is: a word partly behind the subject is an info finding whose
+`coveredFraction` is the most covered word's share, and a word 80% hidden or two
+neighbouring words each half hidden are an error. A CSS background on the video
+still covers its whole box, and a mirrored video (`scaleX(-1)`) is read on the
+side it is painted. When a video's frame cannot be read, the audit treats the
+video as opaque and adds a `video_alpha_unread` info finding saying why: no frame
+decoded yet, the seek still landing, a cross-origin source, no frame size, a
+rotated, skewed or 3D-transformed video, or a frame that reads back fully
+transparent. A fully transparent frame is treated as unread on purpose, since a
+failed draw looks the same; mark text that sits under a cutout before its subject
+enters with `data-layout-allow-occlusion`.
 
 Contrast failures are errors, and each one reports the sampled foreground and
 background colours, the measured ratio against the required one, and a

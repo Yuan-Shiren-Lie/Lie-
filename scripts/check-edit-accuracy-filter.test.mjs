@@ -180,11 +180,18 @@ class Closure {
   }
 }
 
+// A shell script a step runs is read like a step: the scripts and commands it runs count too.
+function seedRun(closure, path) {
+  const fresh = closure.isNew(path);
+  closure.add(path, true);
+  if (fresh && path.endsWith(".sh")) seed(closure, read(path));
+}
+
 // Repo files and package scripts the jobs' steps name directly.
 function seed(closure, text) {
   for (const m of text.matchAll(/uses: \.\/(\S+)/g)) closure.add(`${m[1]}/action.yml`);
   for (const m of text.matchAll(/\b(?:bash|sh|node|bun) ((?:scripts|packages)\/\S+)/g))
-    closure.add(m[1], true);
+    seedRun(closure, m[1]);
   for (const m of text.matchAll(/\bbun run --cwd (\S+) ([\w:-]+)/g)) closure.script(m[1], m[2]);
 }
 
@@ -196,7 +203,12 @@ const cliCommands = (texts) =>
 
 function benchInputs() {
   const closure = new Closure();
-  const steps = ["build", "studio-edit-accuracy", "studio-edit-accuracy-gate"].map(job);
+  const steps = [
+    "build",
+    "studio-edit-accuracy",
+    "studio-edit-accuracy-retry",
+    "studio-edit-accuracy-gate",
+  ].map(job);
   steps.forEach((text) => seed(closure, text));
   for (const name of cliCommands([...steps, read(`${BENCH}/case.mjs`)]))
     closure.add(`packages/cli/src/commands/${name}.ts`);

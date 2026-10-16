@@ -32,7 +32,7 @@ import { LOOP_INFLATED_TIMELINE_SECONDS } from "./compositionLength";
 import { cutToHostSlots } from "../mediaTiming";
 
 export function isRuntimeElementVisibleAt(
-  rawNode: HTMLElement,
+  rawNode: Element,
   options: {
     currentTime: number;
     compositionDuration: number;

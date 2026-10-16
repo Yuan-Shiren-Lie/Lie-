@@ -13,6 +13,7 @@ export class BrowserCleanupError extends AggregateError {}
 const browsers = new Set<Browser>();
 const closing = new WeakMap<Browser, Promise<void>>();
 const pending = new Map<Promise<Browser>, AbortController>();
+const sessionCleanups = new Set<() => Promise<void>>();
 const CLOSE_GRACE_MS = 1_000;
 const EXIT_POLL_MS = 50;
 let listening = false;
@@ -102,7 +103,17 @@ export async function launchManagedBrowser(
 async function closeManagedBrowsers(): Promise<void> {
   for (const abort of pending.values()) abort.abort();
   await Promise.allSettled(pending.keys());
-  await Promise.all([...browsers].map(closeManagedBrowser));
+  const results = await Promise.allSettled([...browsers].map(closeManagedBrowser));
+  results.push(...(await Promise.allSettled([...sessionCleanups].map((cleanup) => cleanup()))));
+  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  if (errors.length) throw new AggregateError(errors, "Browser session shutdown failed.");
+}
+
+export function registerBrowserSessionCleanup(cleanup: () => Promise<void>): () => void {
+  if (shutdown) throw new Error("The CLI is stopping; no browser session can start.");
+  ownSignals();
+  sessionCleanups.add(cleanup);
+  return () => sessionCleanups.delete(cleanup);
 }
 
 /** Manual teardown and signal teardown share the same bounded close, exactly once. */

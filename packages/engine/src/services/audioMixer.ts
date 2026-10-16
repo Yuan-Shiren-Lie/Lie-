@@ -1123,6 +1123,7 @@ export async function processCompositionAudio(
 ): Promise<MixResult> {
   const startMs = Date.now();
   const tracks: AudioTrack[] = [];
+  const preparedTracks = new Array<AudioTrack | undefined>(elements.length);
   const failures: AudioProcessingFailure[] = [];
   // Grouped members are diverted here instead of `tracks` during element
   // processing, then summed into one processed track per group before the
@@ -1154,7 +1155,7 @@ export async function processCompositionAudio(
   }
 
   await Promise.all(
-    elements.map(async (element) => {
+    elements.map(async (element, index) => {
       if (effectiveSignal.aborted) {
         failures.push({
           stage: "cancelled",
@@ -1386,24 +1387,7 @@ export async function processCompositionAudio(
           ...(tailSeconds > 0 ? { tailSeconds } : {}),
         };
 
-        // A grouped member keeps every bit of its OWN processing above
-        // (FX, envelope) exactly like an ungrouped track — it just lands in
-        // the group's bucket instead of the flat list, to be summed into one
-        // processed bus below rather than mixed directly.
-        if (element.groupId) {
-          const bucket = groupTracks.get(element.groupId);
-          if (bucket) bucket.push(track);
-          else groupTracks.set(element.groupId, [track]);
-          if (!groupMeta.has(element.groupId)) {
-            groupMeta.set(element.groupId, {
-              ...(element.groupFxChain ? { fxChain: element.groupFxChain } : {}),
-              ...(element.groupAutomation ? { automation: element.groupAutomation } : {}),
-              volume: element.groupVolume ?? 1,
-            });
-          }
-        } else {
-          tracks.push(track);
-        }
+        preparedTracks[index] = track;
       } catch (err: unknown) {
         // An FX failure is fatal for the whole mix. Every other failure mode
         // degrades gracefully — the track drops and siblings continue — but
@@ -1434,6 +1418,27 @@ export async function processCompositionAudio(
       /* ignore */
     }
     throw err;
+  });
+
+  // FFmpeg's floating-point sum depends on input order. Keep parallel prep,
+  // but assemble flat tracks, group members and groups in authored order.
+  elements.forEach((element, index) => {
+    const track = preparedTracks[index];
+    if (!track) return;
+    if (element.groupId) {
+      const bucket = groupTracks.get(element.groupId);
+      if (bucket) bucket.push(track);
+      else groupTracks.set(element.groupId, [track]);
+      if (!groupMeta.has(element.groupId)) {
+        groupMeta.set(element.groupId, {
+          ...(element.groupFxChain ? { fxChain: element.groupFxChain } : {}),
+          ...(element.groupAutomation ? { automation: element.groupAutomation } : {}),
+          volume: element.groupVolume ?? 1,
+        });
+      }
+    } else {
+      tracks.push(track);
+    }
   });
 
   // Never turn a per-track preparation failure into a successful partial mix.

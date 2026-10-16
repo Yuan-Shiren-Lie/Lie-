@@ -2,7 +2,12 @@ import { EventEmitter } from "node:events";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { formatFfmpegError, isExternalFfmpegInterruption, ffmpegStatsReader } from "./runFfmpeg.js";
+import {
+  describeFfmpegFailure,
+  formatFfmpegError,
+  isExternalFfmpegInterruption,
+  ffmpegStatsReader,
+} from "./runFfmpeg.js";
 
 describe("isExternalFfmpegInterruption", () => {
   const base = {
@@ -151,6 +156,43 @@ function createSpawnSpy() {
   });
   return { spawn, calls };
 }
+
+describe("describeFfmpegFailure", () => {
+  const stderr = "Output #0, ipod, to 'audio.m4a':\n  Metadata:\n    major_brand     : M4A\n";
+
+  it("names the signal that ended ffmpeg when it left no exit code", () => {
+    const message = describeFfmpegFailure(
+      { exitCode: null, signal: "SIGKILL", stderr, terminationReason: "exit" },
+      1000,
+    );
+    expect(message).toMatch(/^FFmpeg ended without an exit code \(SIGKILL\)\./);
+    expect(message).toContain("major_brand     : M4A");
+  });
+
+  it("names a stop the caller asked for", () => {
+    const message = describeFfmpegFailure(
+      { exitCode: null, signal: "SIGTERM", stderr, terminationReason: "abort" },
+      1000,
+    );
+    expect(message).toMatch(/^FFmpeg ended without an exit code \(abort\)\./);
+  });
+
+  it("leads with the timeout when the deadline ended it", () => {
+    const message = describeFfmpegFailure(
+      { exitCode: null, signal: "SIGTERM", stderr, terminationReason: "deadline" },
+      1000,
+    );
+    expect(message).toMatch(/^FFmpeg timed out after 1000 ms/);
+  });
+
+  it("keeps an exit code's message as it was", () => {
+    const message = describeFfmpegFailure(
+      { exitCode: 1, signal: null, stderr: "Invalid argument\n", terminationReason: "exit" },
+      1000,
+    );
+    expect(message).toBe(formatFfmpegError(1, "Invalid argument\n"));
+  });
+});
 
 describe("runFfmpeg binary resolution", () => {
   const originalFfmpegPath = process.env.HYPERFRAMES_FFMPEG_PATH;

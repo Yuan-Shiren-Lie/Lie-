@@ -60,17 +60,26 @@ if (rootVersionRequested) {
   process.exit(0);
 }
 
-// ── Load .env from CWD ─────────────────────────────────────────────────────
-// Agents run from the project directory where .env holds API keys (Gemini,
-// HeyGen, ElevenLabs). Load it automatically so they don't need `source .env`.
-const { applyDotEnv } = await import("./utils/dotEnv.js");
-try {
-  const { readFileSync } = await import("node:fs");
-  const { resolve } = await import("node:path");
-  const envPath = resolve(process.cwd(), ".env");
-  applyDotEnv(readFileSync(envPath, "utf-8"), process.env);
-} catch {
-  /* .env not present — fine, env vars may be set another way */
+// Capture treats CWD as project data too: its early loader must use the same
+// allowlist/opt-out as output ancestors, before browser selection can observe it.
+const { applyDotEnv, CAPTURE_ENV_KEYS } = await import("./utils/dotEnv.js");
+// The root has no value-taking options: Citty skips flags up to the first
+// positional command, and stops subcommand selection at the -- separator.
+const separator = argv.indexOf("--");
+const commandArgs = separator < 0 ? argv : argv.slice(0, separator);
+const captureEnv = commandArgs.find((arg) => !arg.startsWith("-")) === "capture";
+if (!captureEnv || process.env.HYPERFRAMES_NO_CAPTURE_DOTENV !== "1") {
+  try {
+    const { readFileSync } = await import("node:fs");
+    const envPath = resolve(process.cwd(), ".env");
+    applyDotEnv(
+      readFileSync(envPath, "utf-8"),
+      process.env,
+      captureEnv ? CAPTURE_ENV_KEYS : undefined,
+    );
+  } catch {
+    /* .env not present — fine, env vars may be set another way */
+  }
 }
 
 // ── Lazy imports ────────────────────────────────────────────────────────────

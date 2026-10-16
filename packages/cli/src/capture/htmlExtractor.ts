@@ -7,7 +7,7 @@
 
 import type { Page } from "puppeteer-core";
 import type { ExtractedHtml } from "./types.js";
-import { isPrivateUrl } from "./assetDownloader.js";
+import { safeFetch } from "./assetDownloader.js";
 import { CAPTURE_USER_AGENT } from "./userAgent.js";
 
 const DEFAULT_SETTLE_TIME = 3000;
@@ -33,12 +33,14 @@ export async function extractHtml(
 
   for (const href of stylesheetUrls) {
     try {
-      if (isPrivateUrl(href)) continue;
-      const res = await fetch(href, {
+      const res = await safeFetch(href, {
         signal: AbortSignal.timeout(10000),
         headers: { "User-Agent": CAPTURE_USER_AGENT },
       });
-      if (!res.ok) continue;
+      if (!res?.ok) {
+        await res?.body?.cancel().catch(() => {});
+        continue;
+      }
       let css = await res.text();
       // Fix relative url() references
       // fallow-ignore-next-line complexity

@@ -140,15 +140,22 @@ export function formatFfmpegError(
 
 /** formatFfmpegError, led by the timeout when this process was killed at its deadline. */
 export function describeFfmpegFailure(
-  result: Pick<RunFfmpegResult, "exitCode" | "stderr" | "terminationReason">,
+  result: Pick<RunFfmpegResult, "exitCode" | "signal" | "stderr" | "terminationReason">,
   timeoutMs: number,
 ): string {
   const error = formatFfmpegError(result.exitCode, result.stderr);
-  if (result.terminationReason !== "deadline") return error;
-  return (
-    `FFmpeg timed out after ${timeoutMs} ms (ffmpegProcessTimeout; long renders can raise ` +
-    `FFMPEG_PROCESS_TIMEOUT_MS). ${error}`
-  );
+  if (result.terminationReason === "deadline") {
+    return (
+      `FFmpeg timed out after ${timeoutMs} ms (ffmpegProcessTimeout; long renders can raise ` +
+      `FFMPEG_PROCESS_TIMEOUT_MS). ${error}`
+    );
+  }
+  if (result.exitCode !== null) return error;
+  const signalOrRequestedStop =
+    result.terminationReason === "exit" ? result.signal : result.terminationReason;
+  return signalOrRequestedStop
+    ? `FFmpeg ended without an exit code (${signalOrRequestedStop}). ${error}`
+    : error;
 }
 
 function spawnFfmpeg(args: string[]): ChildProcess {
