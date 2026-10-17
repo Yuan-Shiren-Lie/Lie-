@@ -130,13 +130,16 @@ export function useTimelinePlayer({
       void probeMissingSourceDurations(
         mergedElements,
         state.timelineProjectId,
-        (key, durationSeconds) => {
+        (keys, durationSeconds) => {
+          const wanted = new Set(keys);
           usePlayerStore.setState((state) => {
-            const idx = state.elements.findIndex((e) => (e.key ?? e.id) === key);
-            if (idx === -1 || state.elements[idx].sourceDuration != null) return {};
-            const patched = state.elements.slice();
-            patched[idx] = { ...state.elements[idx], sourceDuration: durationSeconds };
-            return { elements: patched };
+            let changed = false;
+            const patched = state.elements.map((e) => {
+              if (e.sourceDuration != null || !wanted.has(e.key ?? e.id)) return e;
+              changed = true;
+              return { ...e, sourceDuration: durationSeconds };
+            });
+            return changed ? { elements: patched } : {};
           });
         },
       );

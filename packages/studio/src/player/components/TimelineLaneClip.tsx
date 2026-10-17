@@ -1,7 +1,8 @@
 import { memo, type CSSProperties, type RefObject } from "react";
 import type { TimelineElement } from "../store/playerStore";
 import type { ThumbnailPriority } from "../lib/thumbnailScheduler";
-import { TimelineClip, clipZoomKey } from "./TimelineClip";
+import { TimelineClip, clipWidthPx, clipZoomKey } from "./TimelineClip";
+import { clipWidthLadder } from "./timelineTheme";
 import { createClipGestureHandlers, type ClipGestureDeps } from "./timelineClipGestureHandlers";
 import { renderClipChildren } from "./timelineClipChildren";
 import type { TimelineEditCapabilities } from "./timelineEditCapabilities";
@@ -45,6 +46,8 @@ const sameCapabilities = (a: TimelineEditCapabilities, b: TimelineEditCapabiliti
   a.canTrimEnd === b.canTrimEnd &&
   a.readOnly === b.readOnly;
 
+const NO_PICTURE: TimelineProps["renderClipContent"] = () => null;
+
 const zoomKey = (p: TimelineLaneClipProps) =>
   clipZoomKey(p.previewElement, p.pps, p.isSelected || p.isHovered);
 
@@ -87,6 +90,7 @@ export const TimelineLaneClip = memo(function TimelineLaneClip({
       actions.current.gestures,
     );
   const isComposition = !!el.compositionSrc;
+  const pictured = clipWidthLadder(clipWidthPx(previewElement, pps)) !== "frame";
   return (
     <TimelineClip
       onContextMenu={(e: React.MouseEvent) => {
@@ -118,10 +122,13 @@ export const TimelineLaneClip = memo(function TimelineLaneClip({
         if (isComposition) actions.current.onDrillDown?.(el);
       }}
     >
-      {renderClipChildren(previewElement, clipStyle, renderClipContent, renderClipOverlay, {
-        priority,
-        rich,
-      })}
+      {renderClipChildren(
+        previewElement,
+        clipStyle,
+        renderClipContent && !pictured ? NO_PICTURE : renderClipContent,
+        renderClipOverlay,
+        { priority, rich },
+      )}
     </TimelineClip>
   );
 }, sameClip);

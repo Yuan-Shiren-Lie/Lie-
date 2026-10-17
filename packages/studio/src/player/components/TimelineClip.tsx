@@ -17,6 +17,7 @@ import { linkLabelColor } from "./linkLabelColor";
 import { OutOfSyncBadge } from "./OutOfSyncBadge";
 import { clipSpeedSuffix } from "./clipToolAttrs";
 import { ClipPeakTooltip } from "./ClipPeakTooltip";
+import { audioPillFlags } from "./audioClipLink";
 import { timeLayerPercent } from "./TimelineTimeLayer";
 
 interface TimelineClipProps {
@@ -152,6 +153,7 @@ export const TimelineClip = memo(function TimelineClip({
       data-clip-start={el.start}
       data-clip-end={el.start + el.duration}
       data-clip-hidden={el.hidden ? "true" : undefined}
+      data-audio-muted={isAudioClip && audioPillFlags(el).muted ? "true" : undefined}
       data-link-color={linkColor ?? undefined}
       data-ladder={ladder}
       data-active={isActive ? "" : undefined}
@@ -271,5 +273,6 @@ export const TimelineClip = memo(function TimelineClip({
       )}
     </button>
   );
-  return isAudioClip || el.hasAudio ? <ClipPeakTooltip>{clip}</ClipPeakTooltip> : clip;
+  const describesPeaks = (isAudioClip || el.hasAudio) && (ladder !== "frame" || isSelected);
+  return describesPeaks ? <ClipPeakTooltip>{clip}</ClipPeakTooltip> : clip;
 });

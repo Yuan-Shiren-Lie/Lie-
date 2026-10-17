@@ -241,6 +241,21 @@ describe("TimelineClip", () => {
     act(() => root.unmount());
   });
 
+  it("greys a muted audio clip at any width, with or without its waveform", () => {
+    const muted = (pps: number, hidden: boolean) => {
+      const { host, root } = renderClip({
+        pps,
+        element: { id: "a", label: "Voice", tag: "audio", start: 0, duration: 1, track: 0, hidden },
+      });
+      const value = host.querySelector(".timeline-clip")?.getAttribute("data-audio-muted");
+      act(() => root.unmount());
+      return value;
+    };
+    expect(muted(4, true)).toBe("true"); // 4 px: the frame tier, no waveform
+    expect(muted(400, true)).toBe("true");
+    expect(muted(4, false)).toBeNull();
+  });
+
   it("applies selected styling when rendered as selected", () => {
     const { host, root } = renderClip({
       element: { id: "selected", label: "Selected", tag: "div", start: 0, duration: 1, track: 0 },

@@ -53,6 +53,15 @@ interface UseDomEditOverlayRectsResult {
   childRects: OverlayRect[];
 }
 
+function lazyOverlayRootScale(
+  overlayEl: HTMLDivElement,
+  iframe: HTMLIFrameElement,
+  doc: Document,
+): () => ReturnType<typeof computeOverlayRootScale> {
+  let read: { value: ReturnType<typeof computeOverlayRootScale> } | undefined;
+  return () => (read ??= { value: computeOverlayRootScale(overlayEl, iframe, doc) }).value;
+}
+
 export function useDomEditOverlayRects({
   iframeRef,
   overlayRef,
@@ -149,7 +158,7 @@ export function useDomEditOverlayRects({
       // or moves the canvas. Resolved per call it was one
       // `querySelector("[data-composition-id]")` and three layout reads EACH,
       // every frame.
-      const scale = computeOverlayRootScale(overlayEl, iframe, doc);
+      const scale = lazyOverlayRootScale(overlayEl, iframe, doc);
 
       if (sel) {
         const el = resolveElementForOverlay(
@@ -171,7 +180,7 @@ export function useDomEditOverlayRects({
           // (a cheap per-call check) and only pays for the full corner-transform
           // measurement when the element is actually rotated — this RAF loop runs
           // every frame for any single selection, so that gate matters here most.
-          const nextRect = orientedGroupAwareOverlayRect(overlayEl, iframe, el, scale);
+          const nextRect = orientedGroupAwareOverlayRect(overlayEl, iframe, el, scale());
           setOverlayRect(nextRect);
           const descendants = el.querySelectorAll("*");
           if (descendants.length > 0 && descendants.length <= 60) {
@@ -181,7 +190,7 @@ export function useDomEditOverlayRects({
               if (!child.getBoundingClientRect) continue;
               // Oriented, not axis-aligned: a child of a rotated element drew its
               // outline square around the rotated glyphs instead of on them.
-              const r = orientedVisibleOverlayRect(overlayEl, iframe, child, scale);
+              const r = orientedVisibleOverlayRect(overlayEl, iframe, child, scale());
               if (r && r.width > 2 && r.height > 2) nextChildRects.push(r);
             }
             if (!childRectsEqual(childRectsRef.current, nextChildRects)) {
@@ -220,7 +229,7 @@ export function useDomEditOverlayRects({
           if (liveGroupKeys.has(key)) continue;
           liveGroupKeys.add(key);
           const el = resolveGroupElement(doc, groupSelection);
-          const base = el ? groupAwareOverlayRect(overlayEl, iframe, el, scale) : null;
+          const base = el ? groupAwareOverlayRect(overlayEl, iframe, el, scale()) : null;
           const rect = base && el ? { ...base, ...hugRectForElement(base, el) } : base;
           if (el && rect)
             nextGroupItems.push({ key, selection: groupSelection, element: el, rect });
@@ -258,7 +267,7 @@ export function useDomEditOverlayRects({
         return;
       }
 
-      setHoverRect(orientedGroupAwareOverlayRect(overlayEl, iframe, hoverEl, scale));
+      setHoverRect(orientedGroupAwareOverlayRect(overlayEl, iframe, hoverEl, scale()));
     };
 
     return subscribeOverlayFrame(update);

@@ -76,12 +76,15 @@ export function createTimelineElementFromManifestClip(params: {
   fallbackIndex: number;
   doc?: Document | null;
   hostEl?: Element | null;
+  transitionLabels?: ReadonlyMap<Element, string>;
 }): TimelineElement {
   const { clip, fallbackIndex, doc } = params;
   let hostEl = params.hostEl ?? null;
-  const transitionLabels = doc
-    ? transitionLabelsForDocument(doc, (doc.defaultView as IframeWindow | null)?.__timelines)
-    : new Map<Element, string>();
+  const transitionLabels =
+    params.transitionLabels ??
+    (doc
+      ? transitionLabelsForDocument(doc, (doc.defaultView as IframeWindow | null)?.__timelines)
+      : new Map<Element, string>());
   const label = getTimelineElementDisplayLabel({
     id: clip.id,
     label: clip.label,

@@ -338,6 +338,12 @@
     0 8px 24px var(--timeline-clip-shadow-dragging);
 }
 
+/* A clip too narrow for a waveform (the frame tier) draws none; its content box, above any theme's pill
+   layer, fills in the bars' colour so a long film's sound still reads at fit zoom. */
+.timeline-clip.is-audio[data-ladder="frame"]:not([data-audio-muted]) .timeline-clip__content {
+  background-color: var(--timeline-waveform-frame-fill);
+}
+
 /* Mute greys the pill in place. Hot path: no transition. */
 .timeline-clip.is-audio[data-clip-hidden="true"],
 .timeline-clip.is-audio[data-audio-muted="true"] {

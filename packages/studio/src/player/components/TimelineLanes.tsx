@@ -30,6 +30,7 @@ import { resolveClipRenderContext } from "./timelineClipChildren";
 import { TimelineTrackRow } from "./TimelineTrackRow";
 import { isTimelineClipActive } from "./useTimelineActiveClips";
 import { queryTimelineClipIndex } from "../lib/timelineClipIndex";
+import { withoutHiddenSlivers } from "./timelineSlivers";
 import { getTimelineElementIdentity } from "../lib/timelineElementHelpers";
 import { timelineClipFocusId } from "./timelineNavigationIdentity";
 import { useTimelineKeyboardActor } from "./useTimelineKeyboardActor";
@@ -220,12 +221,25 @@ export function TimelineLanes({
           const rowHeight = rowGeometry.getRowHeight(row);
           const els = tracks.find(([t]) => t === trackNum)?.[1] ?? [];
           const renderElements = rowsVirtualized
-            ? queryTimelineClipIndex(
-                clipIndex,
-                trackNum,
-                renderTimeRange,
-                pinnedClipIdentities,
-                actorWindows,
+            ? withoutHiddenSlivers(
+                queryTimelineClipIndex(
+                  clipIndex,
+                  trackNum,
+                  renderTimeRange,
+                  pinnedClipIdentities,
+                  actorWindows,
+                ),
+                pps,
+                (el) => {
+                  const key = getTimelineElementIdentity(el);
+                  return (
+                    pinnedClipIdentities.has(key) ||
+                    selectedElementId === key ||
+                    selectedElementIds.has(key) ||
+                    hoveredClip === key ||
+                    keyboard.rovingTargetId === timelineClipFocusId(key)
+                  );
+                },
               )
             : els;
           const isPendingTrack =
