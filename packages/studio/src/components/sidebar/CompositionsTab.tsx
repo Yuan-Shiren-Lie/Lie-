@@ -19,6 +19,7 @@ import { thumbnailRevisionOf } from "../../player/store/thumbnailSlice";
 import { encodePreviewPath } from "../../player/components/thumbnailUtils";
 import { TIMELINE_COMPOSITION_MIME } from "../../utils/timelineCompositionDrop";
 import { Tooltip } from "../ui/Tooltip";
+import { useDockLayoutStore } from "../dock/dockLayoutStore";
 
 interface CompositionsTabProps {
   projectId: string;
@@ -468,8 +469,17 @@ export const CompositionsTab = memo(function CompositionsTab({
   const previewBooted = usePlayerStore((state) => state.previewBooted);
   if (compositions.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center px-4">
-        <p className="text-xs text-neutral-600 text-center">No compositions found</p>
+      <div className="flex-1 flex flex-col items-center justify-center px-4 gap-2">
+        <p className="text-xs text-neutral-600 text-center">
+          No compositions yet: a composition is an HTML scene in your project
+        </p>
+        <button
+          type="button"
+          onClick={() => useDockLayoutStore.getState().activatePanel("catalog")}
+          className="px-2.5 py-1 text-[11px] font-medium rounded-md bg-panel-input text-panel-text-3 hover:text-panel-text-1 active:scale-[0.98] transition-colors"
+        >
+          Browse starter scenes
+        </button>
       </div>
     );
   }
