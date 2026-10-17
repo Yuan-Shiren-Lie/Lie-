@@ -16,6 +16,7 @@ import { parseOutputResolutionFlag } from "../utils/parseOutputResolution.js";
 import type { Example } from "./_examples.js";
 import { c } from "../ui/colors.js";
 import { readAllowedCompositionFpsFromDir } from "../utils/compositionFps.js";
+import { isMissingPackageError, missingPackageMessage } from "../utils/missingPackage.js";
 
 export const examples: Example[] = [
   ["Deploy the Lambda render stack to AWS", "hyperframes lambda deploy"],
@@ -231,13 +232,9 @@ export default defineCommand({
       try {
         await import("@hyperframes/aws-lambda/sdk");
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ERR_MODULE_NOT_FOUND") {
+        if (isMissingPackageError(err, "@hyperframes/aws-lambda")) {
           console.error(
-            `${c.error("@hyperframes/aws-lambda is not installed.")} The ${c.accent(`hyperframes lambda ${subcommand}`)} command needs it at runtime.\n` +
-              `Install it alongside the CLI:\n` +
-              `  ${c.accent("npm install -g @hyperframes/aws-lambda")}\n` +
-              `Or, for an opt-in dev setup:\n` +
-              `  ${c.accent("npm install @hyperframes/aws-lambda")}`,
+            missingPackageMessage("@hyperframes/aws-lambda", `hyperframes lambda ${subcommand}`),
           );
           failCommand();
         }
