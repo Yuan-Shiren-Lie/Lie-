@@ -76,9 +76,7 @@ describe("renderToLambda", () => {
     expect(handle.executionArn).toContain("smoke-1");
     expect(handle.bucketName).toBe("test-bucket");
     expect(handle.outputS3Uri).toBe("s3://test-bucket/renders/smoke-1/output.mp4");
-    expect(handle.projectS3Uri).toMatch(
-      /^s3:\/\/test-bucket\/sites\/[0-9a-f]{16}\/project\.tar\.gz$/,
-    );
+    expect(handle.projectS3Uri).toMatch(/^s3:\/\/test-bucket\/sites\/[0-9a-f]{16}\/files\.json$/);
     expect(Object.keys(handle)).toEqual([
       "renderId",
       "executionArn",

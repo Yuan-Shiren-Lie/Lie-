@@ -21,28 +21,24 @@ export class FakeS3 {
   ops: FakeS3Op[] = [];
   existing = new Set<string>();
   bodies = new Map<string, Buffer>();
+  metadata = new Map<string, Record<string, string> | undefined>();
 
   async send(command: unknown): Promise<unknown> {
     const cmdName = (command as { constructor: { name: string } }).constructor.name;
-    const input = (command as { input: { Bucket: string; Key: string } }).input;
+    const input = (
+      command as { input: { Bucket: string; Key: string; Metadata?: Record<string, string> } }
+    ).input;
+    const id = `${input.Bucket}/${input.Key}`;
     if (cmdName === "HeadObjectCommand") {
       this.ops.push({ kind: "head", bucket: input.Bucket, key: input.Key });
-      if (this.existing.has(`${input.Bucket}/${input.Key}`)) {
-        return { ContentLength: 1, LastModified: new Date("2026-05-16T00:00:00Z") };
-      }
-      const err = new Error("Not Found") as Error & {
-        $metadata: { httpStatusCode: number };
-        name: string;
-      };
-      err.name = "NotFound";
-      err.$metadata = { httpStatusCode: 404 };
-      throw err;
+      return this.head(id);
     }
     if (cmdName === "PutObjectCommand") {
       this.ops.push({ kind: "put", bucket: input.Bucket, key: input.Key });
-      this.existing.add(`${input.Bucket}/${input.Key}`);
+      this.existing.add(id);
+      this.metadata.set(id, input.Metadata);
       this.bodies.set(
-        `${input.Bucket}/${input.Key}`,
+        id,
         await drainBody(
           (command as { input: { Body: NodeJS.ReadableStream | Buffer } }).input.Body,
         ),
@@ -50,6 +46,19 @@ export class FakeS3 {
       return {};
     }
     throw new Error(`FakeS3: unexpected command ${cmdName}`);
+  }
+
+  private head(id: string): unknown {
+    if (this.existing.has(id)) {
+      return { ContentLength: this.bodies.get(id)?.length, Metadata: this.metadata.get(id) };
+    }
+    const err = new Error("Not Found") as Error & {
+      $metadata: { httpStatusCode: number };
+      name: string;
+    };
+    err.name = "NotFound";
+    err.$metadata = { httpStatusCode: 404 };
+    throw err;
   }
 }
 
