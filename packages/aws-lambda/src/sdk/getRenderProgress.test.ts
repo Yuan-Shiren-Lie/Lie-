@@ -5,6 +5,7 @@ import {
   type HistoryEvent,
   type SFNClient,
 } from "@aws-sdk/client-sfn";
+import { computeRenderCost } from "./costAccounting.js";
 import { getRenderProgress } from "./getRenderProgress.js";
 
 interface DescribeShape {
@@ -13,28 +14,46 @@ interface DescribeShape {
   stopDate?: Date;
 }
 
+interface FakeInput {
+  executionArn?: string;
+  mapRunArn?: string;
+  nextToken?: string;
+}
+
 class FakeSFN {
   describe: DescribeShape = {};
   // Pages of history events; FakeSFN walks them in order, paginating with `nextToken`.
   historyPages: HistoryEvent[][] = [];
+  // Distributed Map child executions: map run ARN -> child ARNs, child ARN -> its history.
+  mapRunChildren: Record<string, string[]> = {};
+  childHistories: Record<string, HistoryEvent[]> = {};
   async send(command: unknown): Promise<unknown> {
-    const cmdName = (command as { constructor: { name: string } }).constructor.name;
-    if (cmdName === "DescribeExecutionCommand") {
-      return {
-        status: this.describe.status ?? "RUNNING",
-        startDate: this.describe.startDate ?? new Date("2026-05-16T00:00:00Z"),
-        stopDate: this.describe.stopDate,
-      };
-    }
-    if (cmdName === "GetExecutionHistoryCommand") {
-      const input = (command as { input: { nextToken?: string } }).input;
-      const idx = input.nextToken ? Number.parseInt(input.nextToken, 10) : 0;
-      const page = this.historyPages[idx] ?? [];
-      const nextToken = idx + 1 < this.historyPages.length ? String(idx + 1) : undefined;
-      return { events: page, nextToken };
-    }
-    throw new Error(`FakeSFN: unexpected command ${cmdName}`);
+    const { constructor, input } = command as { constructor: { name: string }; input: FakeInput };
+    if (constructor.name === "DescribeExecutionCommand") return this.describeResult();
+    if (constructor.name === "ListExecutionsCommand") return this.listResult(input);
+    if (constructor.name === "GetExecutionHistoryCommand") return this.historyResult(input);
+    throw new Error(`FakeSFN: unexpected command ${constructor.name}`);
   }
+  private describeResult(): unknown {
+    return {
+      status: this.describe.status ?? "RUNNING",
+      startDate: this.describe.startDate ?? new Date("2026-05-16T00:00:00Z"),
+      stopDate: this.describe.stopDate,
+    };
+  }
+  private listResult({ mapRunArn = "" }: FakeInput): unknown {
+    const arns = this.mapRunChildren[mapRunArn] ?? [];
+    return { executions: arns.map((executionArn) => ({ executionArn })) };
+  }
+  private historyResult({ executionArn = "", nextToken }: FakeInput): unknown {
+    const child = this.childHistories[executionArn];
+    return historyPage(child ? [child] : this.historyPages, Number(nextToken ?? 0));
+  }
+}
+
+function historyPage(pages: HistoryEvent[][], idx: number): unknown {
+  const nextToken = idx + 1 < pages.length ? String(idx + 1) : undefined;
+  return { events: pages[idx] ?? [], nextToken };
 }
 
 function lambdaSucceeded(payload: unknown): HistoryEvent {
@@ -289,6 +308,54 @@ describe("getRenderProgress", () => {
     expect(progress.framesRendered).toBe(4);
     expect(progress.totalFrames).toBe(4);
     expect(progress.overallProgress).toBe(1);
+  });
+
+  it("reads chunk frames, cost and errors from Distributed Map child executions", async () => {
+    const sfn = new FakeSFN();
+    const mapRunArn = "arn:aws:states:us-east-2:0:mapRun:hf-render/RenderChunksV2:run";
+    sfn.historyPages = [
+      [
+        stateEntered("PlanV2"),
+        taskScheduled(),
+        taskSucceeded({ TotalFrames: 300, DurationMs: 1000 }),
+        {
+          type: "MapStateEntered",
+          id: 1,
+          timestamp: new Date(),
+          stateEnteredEventDetails: { name: "RenderChunksV2" },
+        } as HistoryEvent,
+        {
+          type: "MapRunStarted",
+          id: 1,
+          timestamp: new Date(),
+          mapRunStartedEventDetails: { mapRunArn },
+        } as HistoryEvent,
+      ],
+    ];
+    sfn.mapRunChildren[mapRunArn] = ["child-0", "child-1"];
+    sfn.childHistories["child-0"] = [
+      stateEntered("RenderChunkV2"),
+      taskScheduled(),
+      taskSucceeded({ FramesEncoded: 150, DurationMs: 4000 }),
+    ];
+    sfn.childHistories["child-1"] = [
+      stateEntered("RenderChunkV2"),
+      taskScheduled(),
+      taskFailed("PLAN_HASH_MISMATCH", "hash drift"),
+    ];
+    const p = await getRenderProgress({ executionArn: "arn:x", sfn: sfn as unknown as SFNClient });
+    expect(p.framesRendered).toBe(150);
+    expect(p.overallProgress).toBeCloseTo(0.1 + 0.8 * 0.5, 5);
+    expect(p.lambdasInvoked).toBe(3);
+    const billed = [1000, 4000].map((billedDurationMs) => ({
+      billedDurationMs,
+      memorySizeMb: 10240,
+      estimated: false,
+    }));
+    expect(p.costs.breakdown.lambdaUsd).toBe(computeRenderCost(billed, 0).breakdown.lambdaUsd);
+    expect(p.errors).toEqual([
+      { state: "RenderChunkV2", error: "PLAN_HASH_MISMATCH", cause: "hash drift" },
+    ]);
   });
 
   it("requires executionArn", async () => {

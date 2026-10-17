@@ -334,6 +334,12 @@ Resources:
             Type: Pass
             Parameters:
               ChunkIndexes.$: "States.ArrayRange(0, States.MathAdd($.Plan.ChunkCount, -1), 1)"
+              # Chunks past ReservedConcurrency would be throttled and burn their retries;
+              # the Map queues them instead. 0 = no cap. StringToJson because SAM quotes
+              # intrinsics inside a Definition, and MaxConcurrencyPath needs a number.
+              MaxChunkConcurrency.$: !Sub
+                - "States.StringToJson('${Cap}')"
+                - Cap: !If [HasReservedConcurrency, !Ref ReservedConcurrency, "0"]
             ResultPath: $.Iterator
             Next: AssertChunkCount
 
@@ -365,6 +371,7 @@ Resources:
 
           RenderChunks:
             Type: Map
+            Label: RenderChunks
             ItemsPath: $.Iterator.ChunkIndexes
             ItemSelector:
               ChunkIndex.$: "$$.Map.Item.Value"
@@ -372,17 +379,14 @@ Resources:
               PlanHash.$: "$.Plan.PlanHash"
               ChunkOutputS3Prefix.$: "$.PlanOutputS3Prefix"
               Format.$: "$.Plan.Format"
-            # Map fan-out cap derives from the Plan's chunkCount so
-            # caller-supplied `Config.maxParallelChunks` (which
-            # `plan()` honours when sizing the chunk list) is the
-            # single source of truth. A hardcoded value here would
-            # silently throttle adopters who scale up the chunk count
-            # in their event payload.
-            MaxConcurrencyPath: $.Plan.ChunkCount
+            MaxConcurrencyPath: $.Iterator.MaxChunkConcurrency
             ResultPath: $.Chunks
             ItemProcessor:
               ProcessorConfig:
-                Mode: INLINE
+                # Inline Map runs at most 40 iterations at once. STANDARD children
+                # because EXPRESS ones stop at 5 minutes and a chunk may run 15.
+                Mode: DISTRIBUTED
+                ExecutionType: STANDARD
               StartAt: RenderChunk
               States:
                 RenderChunk:
@@ -465,6 +469,7 @@ Resources:
 
           RenderChunksV2:
             Type: Map
+            Label: RenderChunksV2
             ItemsPath: $.Iterator.ChunkIndexes
             ItemSelector:
               ChunkIndex.$: "$$.Map.Item.Value"
@@ -473,11 +478,12 @@ Resources:
               PlanHash.$: "$.Plan.PlanHash"
               ChunkOutputS3Prefix.$: "$.PlanOutputS3Prefix"
               Format.$: "$.Plan.Format"
-            MaxConcurrencyPath: $.Plan.ChunkCount
+            MaxConcurrencyPath: $.Iterator.MaxChunkConcurrency
             ResultPath: $.Chunks
             ItemProcessor:
               ProcessorConfig:
-                Mode: INLINE
+                Mode: DISTRIBUTED
+                ExecutionType: STANDARD
               StartAt: RenderChunkV2
               States:
                 RenderChunkV2:
@@ -583,6 +589,20 @@ Resources:
               - Effect: Allow
                 Action: lambda:InvokeFunction
                 Resource: !GetAtt RenderFunction.Arn
+        # A Distributed Map runs each chunk as a child execution of this state machine.
+        # ARNs built by name: !Ref RenderStateMachine here would be a dependency cycle.
+        - PolicyName: RunDistributedMapChildren
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${ProjectName}-render"
+              - Effect: Allow
+                Action:
+                  - states:DescribeExecution
+                  - states:StopExecution
+                Resource: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${ProjectName}-render:*"
         - PolicyName: WriteCloudwatchLogs
           PolicyDocument:
             Version: "2012-10-17"

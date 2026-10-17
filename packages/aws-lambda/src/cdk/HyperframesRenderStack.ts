@@ -126,7 +126,7 @@ export class HyperframesRenderStack extends Construct {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    const definition = this.buildStateMachineDefinition();
+    const definition = this.buildStateMachineDefinition(props.reservedConcurrency);
 
     this.stateMachine = new sfn.StateMachine(this, "RenderStateMachine", {
       stateMachineName: `${projectName}-render`,
@@ -189,7 +189,7 @@ export class HyperframesRenderStack extends Construct {
    * template and this construct can be diffed shape-for-shape during
    * the snapshot test.
    */
-  private buildStateMachineDefinition(): sfn.IChainable {
+  private buildStateMachineDefinition(reservedConcurrency: number | undefined): sfn.IChainable {
     // `ChromeBinaryUnavailableError` is non-retryable: a wedged warm
     // instance keeps returning the same falsy executablePath until the
     // env recycles, so retries just burn the 4× 15-min budget.
@@ -307,6 +307,9 @@ export class HyperframesRenderStack extends Construct {
     const buildChunkList = new sfn.Pass(this, "BuildChunkList", {
       parameters: {
         "ChunkIndexes.$": "States.ArrayRange(0, States.MathAdd($.Plan.ChunkCount, -1), 1)",
+        // Chunks past the Lambda's reserved concurrency would be throttled and burn their
+        // retries; queue them in the Map instead. 0 = no cap beyond the chunk count.
+        MaxChunkConcurrency: reservedConcurrency ?? 0,
       },
       resultPath: "$.Iterator",
     });
@@ -345,7 +348,11 @@ export class HyperframesRenderStack extends Construct {
       maxDelay: Duration.seconds(60),
     });
 
-    const renderChunks = new sfn.Map(this, "RenderChunks", {
+    const renderChunks = new sfn.DistributedMap(this, "RenderChunks", {
+      label: "RenderChunks",
+      // Inline Map runs at most 40 iterations at once. STANDARD children because EXPRESS
+      // ones stop at 5 minutes and a chunk may run for the Lambda's full 15.
+      mapExecutionType: sfn.StateMachineType.STANDARD,
       itemsPath: "$.Iterator.ChunkIndexes",
       itemSelector: {
         "ChunkIndex.$": "$$.Map.Item.Value",
@@ -354,7 +361,7 @@ export class HyperframesRenderStack extends Construct {
         "ChunkOutputS3Prefix.$": "$.PlanOutputS3Prefix",
         "Format.$": "$.Plan.Format",
       },
-      maxConcurrencyPath: "$.Plan.ChunkCount",
+      maxConcurrencyPath: "$.Iterator.MaxChunkConcurrency",
       resultPath: "$.Chunks",
     });
     renderChunks.itemProcessor(renderChunkTask);
@@ -416,7 +423,9 @@ export class HyperframesRenderStack extends Construct {
       maxDelay: Duration.seconds(60),
     });
 
-    const renderChunksV2 = new sfn.Map(this, "RenderChunksV2", {
+    const renderChunksV2 = new sfn.DistributedMap(this, "RenderChunksV2", {
+      label: "RenderChunksV2",
+      mapExecutionType: sfn.StateMachineType.STANDARD,
       itemsPath: "$.Iterator.ChunkIndexes",
       itemSelector: {
         "ChunkIndex.$": "$$.Map.Item.Value",
@@ -426,7 +435,7 @@ export class HyperframesRenderStack extends Construct {
         "ChunkOutputS3Prefix.$": "$.PlanOutputS3Prefix",
         "Format.$": "$.Plan.Format",
       },
-      maxConcurrencyPath: "$.Plan.ChunkCount",
+      maxConcurrencyPath: "$.Iterator.MaxChunkConcurrency",
       resultPath: "$.Chunks",
     });
     renderChunksV2.itemProcessor(renderChunkV2Task);
