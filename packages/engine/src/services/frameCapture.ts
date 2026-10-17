@@ -2217,7 +2217,7 @@ async function decodeAllImages(page: Page): Promise<void> {
   });
 }
 
-async function applyVideoMetadataHints(
+export async function applyVideoMetadataHints(
   page: Page,
   hints: readonly CaptureVideoMetadataHint[] | undefined,
 ): Promise<void> {
@@ -2225,7 +2225,8 @@ async function applyVideoMetadataHints(
 
   // fallow-ignore-next-line complexity
   await page.evaluate(
-    (metadataHints: CaptureVideoMetadataHint[]) => {
+    async (metadataHints: CaptureVideoMetadataHint[]) => {
+      const posters = new Set<string>();
       for (const hint of metadataHints) {
         if (
           !hint.id ||
@@ -2239,19 +2240,20 @@ async function applyVideoMetadataHints(
 
         const video = (window.__hfMediaEl?.(hint.id) ??
           document.getElementById(hint.id)) as HTMLVideoElement | null;
-        if (!video) continue;
+        if (!video || video.hasAttribute("poster")) continue;
 
-        if (!video.hasAttribute("width")) video.setAttribute("width", String(hint.width));
-        if (!video.hasAttribute("height")) video.setAttribute("height", String(hint.height));
-
-        const computed = window.getComputedStyle(video);
-        if (
-          !video.style.aspectRatio &&
-          (!computed.aspectRatio || computed.aspectRatio === "auto")
-        ) {
-          video.style.aspectRatio = `${hint.width} / ${hint.height}`;
-        }
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${hint.width}" height="${hint.height}"/>`;
+        const intrinsicSizePoster = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+        video.poster = intrinsicSizePoster;
+        posters.add(intrinsicSizePoster);
       }
+      await Promise.all(
+        [...posters].map((src) => {
+          const image = new Image();
+          image.src = src;
+          return image.decode();
+        }),
+      );
     },
     [...hints],
   );
