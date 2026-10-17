@@ -19,9 +19,13 @@ The adapter seeks `lottie-web` with `goToAndStop(timeMs, false)` and dotLottie w
 
 ## lottie-web Pattern
 
+Before rendering, copy lottie.min.js from a pinned `lottie-web` release into
+`lib/lottie-web/` in the project. For example, version 5.12.2 is available at
+https://cdnjs.cloudflare.com/ajax/libs/bodymovin/5.12.2/lottie.min.js.
+
 ```html
 <div id="logo-lottie" class="lottie-layer"></div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/bodymovin/5.12.2/lottie.min.js"></script>
+<script src="lib/lottie-web/lottie.min.js"></script>
 <script>
   const anim = lottie.loadAnimation({
     container: document.getElementById("logo-lottie"),
@@ -45,21 +49,37 @@ The adapter seeks `lottie-web` with `goToAndStop(timeMs, false)` and dotLottie w
 
 ## dotLottie Pattern
 
+Use the browser ESM entry, not the package's CommonJS entry. Before rendering,
+copy `dist/index.js` and `dist/dotlottie-player.wasm` from the same pinned
+`@lottiefiles/dotlottie-web` release into `lib/dotlottie-web/` in the project.
+For example, these files from version 0.81.0 are available at:
+
+- https://unpkg.com/@lottiefiles/dotlottie-web@0.81.0/dist/index.js
+- https://unpkg.com/@lottiefiles/dotlottie-web@0.81.0/dist/dotlottie-player.wasm
+
+Keep both files local and set the WASM URL before constructing a player so
+rendering does not fetch the SDK or WASM from a CDN.
+
 ```html
 <canvas id="product-lottie" class="lottie-canvas"></canvas>
-<script src="https://unpkg.com/@lottiefiles/dotlottie-web"></script>
-<script>
+<script type="module">
+  import { DotLottie } from "./lib/dotlottie-web/index.js";
+
+  DotLottie.setWasmUrl(new URL("./lib/dotlottie-web/dotlottie-player.wasm", import.meta.url).href);
   const player = new DotLottie({
     canvas: document.getElementById("product-lottie"),
     src: "assets/product-flow.lottie",
     autoplay: false,
     loop: false,
+    renderConfig: { autoResize: false, freezeOnOffscreen: false },
   });
 
   window.__hfLottie = window.__hfLottie || [];
   window.__hfLottie.push(player);
 </script>
 ```
+
+The adapter drives this player through `setFrame`; do not start playback.
 
 ```css
 .lottie-canvas {
