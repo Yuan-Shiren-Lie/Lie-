@@ -2,10 +2,11 @@
  * `getRenderProgress` — read-only progress + cost snapshot for a single
  * render started by {@link renderToLambda}.
  *
- * Pulls one `DescribeExecution` + one `GetExecutionHistory` per call. The
- * history is paginated server-side; the helper loops until exhausted so a
- * 1,000-event Step Functions execution still produces a single
- * `RenderProgress` snapshot.
+ * Pulls one `DescribeExecution` + one `GetExecutionHistory` per call, plus
+ * one history per chunk: the Distributed Map runs each chunk as a child
+ * execution whose events never reach the parent history. Histories are
+ * paginated server-side; the helper loops until exhausted so a 1,000-event
+ * Step Functions execution still produces a single `RenderProgress` snapshot.
  *
  * Progress math:
  *   - 0  before Plan completes (no frame count is known yet)
@@ -24,6 +25,7 @@ import {
   DescribeExecutionCommand,
   GetExecutionHistoryCommand,
   type HistoryEvent,
+  ListExecutionsCommand,
   SFNClient,
 } from "@aws-sdk/client-sfn";
 import {
@@ -103,7 +105,11 @@ export async function getRenderProgress(opts: GetRenderProgressOptions): Promise
   const endedAt = describe.stopDate?.toISOString() ?? null;
 
   const history = await loadFullHistory(sfn, opts.executionArn);
-  const summary = summarizeHistory(history, memoryMb);
+  // Each child history opens with its own state entry, so one pass over the concatenation is safe.
+  const summary = summarizeHistory(
+    [...history, ...(await loadChunkHistories(sfn, history))],
+    memoryMb,
+  );
 
   const costs = computeRenderCost(summary.lambdaInvocations, summary.stateTransitions);
   const overallProgress = computeOverallProgress({
@@ -145,6 +151,36 @@ async function loadFullHistory(sfn: SFNClient, executionArn: string): Promise<Hi
     if (!nextToken) break;
   }
   return events;
+}
+
+const CHILD_HISTORY_READS_IN_FLIGHT = 10;
+
+// ponytail: one history read per chunk per poll; GetExecutionHistory refills at 20/s per
+// account, so a few hundred chunks polled every few seconds throttles. Cache finished children then.
+async function loadChunkHistories(sfn: SFNClient, parent: HistoryEvent[]): Promise<HistoryEvent[]> {
+  const mapRunArns = parent.flatMap((ev) => ev.mapRunStartedEventDetails?.mapRunArn ?? []);
+  const childArns = (
+    await Promise.all(mapRunArns.map((arn) => listMapRunChildren(sfn, arn)))
+  ).flat();
+  const histories: HistoryEvent[][] = [];
+  for (let i = 0; i < childArns.length; i += CHILD_HISTORY_READS_IN_FLIGHT) {
+    const batch = childArns.slice(i, i + CHILD_HISTORY_READS_IN_FLIGHT);
+    histories.push(...(await Promise.all(batch.map((arn) => loadFullHistory(sfn, arn)))));
+  }
+  return histories.flat();
+}
+
+async function listMapRunChildren(sfn: SFNClient, mapRunArn: string): Promise<string[]> {
+  const arns: string[] = [];
+  let nextToken: string | undefined;
+  do {
+    const res = await sfn.send(
+      new ListExecutionsCommand({ mapRunArn, maxResults: 1000, nextToken }),
+    );
+    arns.push(...(res.executions ?? []).flatMap((child) => child.executionArn ?? []));
+    nextToken = res.nextToken;
+  } while (nextToken);
+  return arns;
 }
 
 interface HistorySummary {
