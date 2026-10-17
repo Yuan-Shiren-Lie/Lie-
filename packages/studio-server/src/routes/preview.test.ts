@@ -1324,6 +1324,7 @@ describe("hf-proxy negotiation and media codec map injection (U3)", () => {
       browserHostile: boolean;
       representativeMime: string | null;
       hasAlpha: boolean;
+      seekHostile?: boolean;
     } | null>;
   }): Promise<typeof import("./preview.js")> {
     vi.resetModules();
@@ -1368,18 +1369,6 @@ describe("hf-proxy negotiation and media codec map injection (U3)", () => {
           representativeMime: null,
           hasAlpha: false,
         })),
-      decideMediaProxyEligibility: (
-        facts: {
-          browserHostile: boolean;
-          hasAlpha: boolean;
-        } | null,
-      ) => {
-        if (!facts) return { eligible: false, reason: "unknown_codec" };
-        if (!facts.browserHostile) {
-          return { eligible: false, reason: "browser_safe_codec" };
-        }
-        return { eligible: true };
-      },
       isProxyVariant: (value: string) => value === "h264" || value === "vp8",
       isProxyVariantRequest: (value: string) =>
         value === "auto" || value === "h264" || value === "vp8",
@@ -1679,6 +1668,42 @@ describe("hf-proxy negotiation and media codec map injection (U3)", () => {
 
       expect(res.status).toBe(422);
       expect(resolveProxyMock).not.toHaveBeenCalled();
+    });
+
+    it("makes a seek copy of a far-keyframed video only at a preview size", async () => {
+      const projectDir = createProjectDir();
+      writeFileSync(join(projectDir, "clip.mp4"), "video-bytes");
+      const resolveProxyMock = vi.fn(async () => {
+        const proxyPath = join(projectDir, "proxy.mp4");
+        writeFileSync(proxyPath, "seek-copy");
+        return proxyPath;
+      });
+      const { registerPreviewRoutes: register } = await loadPreviewModule({
+        resolveProxyImpl: resolveProxyMock,
+        probeAssetCodecImpl: async () => ({
+          codecName: "h264",
+          browserHostile: false,
+          representativeMime: null,
+          hasAlpha: false,
+          seekHostile: true,
+        }),
+      });
+      const app = new Hono();
+      register(app, createAdapter(projectDir));
+      const url = "http://localhost/projects/demo/preview/clip.mp4?hf-proxy=h264";
+
+      const sourceSize = await app.request(url);
+      const sized = await app.request(`${url}&hf-proxy-box=1024x724`);
+
+      expect(sourceSize.status).toBe(422);
+      expect(sized.status).toBe(200);
+      expect(resolveProxyMock).toHaveBeenCalledTimes(1);
+      expect(resolveProxyMock).toHaveBeenCalledWith(
+        projectDir,
+        join(projectDir, "clip.mp4"),
+        "h264",
+        { width: 1024, height: 724 },
+      );
     });
 
     it("returns 404 without transcoding when the param value is not a proxy variant", async () => {

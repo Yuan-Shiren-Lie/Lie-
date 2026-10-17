@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, renameSync, statSync, unlinkSync, utimesSync } from "node:fs";
+import { constants as osConstants, setPriority } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   formatPreviewProxyBox,
@@ -24,7 +25,7 @@ import { mkdirWithinProject, realpath, realProjectRoot } from "./safePath.js";
  * caller, and drops the copy while it is still queued with no caller left.
  */
 
-export const PROXY_PARAMS_VERSION = "v5";
+export const PROXY_PARAMS_VERSION = "v6";
 
 export const CACHE_DIR_NAME = ".transcode-cache";
 
@@ -438,6 +439,8 @@ async function runFfmpeg(
   return new Promise((resolvePromise, reject) => {
     const commonArgs = ["-y", "-i", sourcePath, "-vf", videoFilter];
     const h264Args = [
+      "-force_key_frames",
+      "expr:gte(t,n_forced*1)",
       "-c:v",
       "libx264",
       "-profile:v",
@@ -499,6 +502,9 @@ async function runFfmpeg(
       killSignal: "SIGKILL",
       windowsHide: true,
     });
+    try {
+      if (proc.pid) setPriority(proc.pid, osConstants.priority.PRIORITY_BELOW_NORMAL);
+    } catch {}
     let stderrTail = "";
     proc.stderr?.on("data", (chunk: Buffer) => {
       stderrTail = (stderrTail + chunk.toString()).slice(-STDERR_TAIL_MAX_CHARS);

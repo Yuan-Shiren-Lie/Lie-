@@ -869,3 +869,110 @@ describe("a copy sized to how large the video shows", () => {
     expect(boxOf(el)).toBe("2896x4096");
   });
 });
+
+describe("a seek copy for a video whose keyframes are far apart", () => {
+  const SEEK_ENTRY: MediaCodecMapEntry = { ...H264_ENTRY, seekHostile: true };
+  // Fresh modules: the one-at-a-time queue is module state and must not carry across tests.
+  let runtime: typeof import("./mediaProxy");
+  let dispatch: typeof import("./adapters/seek-dispatch");
+  let bridge: typeof import("./bridge");
+
+  beforeEach(async () => {
+    vi.resetModules();
+    runtime = await import("./mediaProxy");
+    dispatch = await import("./adapters/seek-dispatch");
+    bridge = await import("./bridge");
+    for (const [side, value] of [
+      ["clientWidth", 640],
+      ["clientHeight", 360],
+    ] as const) {
+      Object.defineProperty(document.documentElement, side, { configurable: true, value });
+    }
+  });
+
+  function sparseVideo(src: string, source = { width: 3840, height: 2160 }): HTMLVideoElement {
+    window.__HF_MEDIA_CODEC_MAP__ = { ...window.__HF_MEDIA_CODEC_MAP__, [src]: SEEK_ENTRY };
+    const el = createVideo(src);
+    Object.defineProperty(el, "videoWidth", { value: source.width, configurable: true });
+    Object.defineProperty(el, "videoHeight", { value: source.height, configurable: true });
+    el.getBoundingClientRect = () => ({ width: 640, height: 360 }) as DOMRect;
+    return el;
+  }
+
+  const playing = (el: HTMLMediaElement, value: boolean) =>
+    Object.defineProperty(el, "paused", { value: !value, configurable: true });
+
+  const askedFor = () => vi.mocked(fetch).mock.calls.map(([href]) => String(href));
+
+  const pending = () =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 202, headers: { "Retry-After": "2" } })),
+    );
+
+  it("asks for a copy at the shown size and swaps it in while paused, with no hold or diagnostic", async () => {
+    const el = sparseVideo("/sparse.mp4");
+
+    runtime.handleMetadataForProxy(el);
+    await settle();
+
+    expect(askedFor()).toEqual([expect.stringContaining("hf-proxy=h264&hf-proxy-box=724x362")]);
+    expect(isProxied(el)).toBe(true);
+    expect(el.load).toHaveBeenCalledTimes(1);
+    expect(bridge.postRuntimeMessage).not.toHaveBeenCalled();
+  });
+
+  it("never holds a jump while the copy is being made", async () => {
+    vi.useFakeTimers();
+    pending();
+    const el = sparseVideo("/sparse.mp4");
+    runtime.handleMetadataForProxy(el);
+    let jumped = false;
+    void dispatch.waitForSeekCompletion().then(() => (jumped = true));
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(askedFor()).toHaveLength(1);
+    expect(jumped).toBe(true);
+    expect(el.getAttribute("src")).toBe("/sparse.mp4");
+  });
+
+  it("keeps a playing original until it pauses", async () => {
+    const el = sparseVideo("/sparse.mp4");
+    playing(el, true);
+
+    runtime.handleMetadataForProxy(el);
+    await settle();
+    expect(askedFor()).toHaveLength(1);
+    expect(isProxied(el)).toBe(false);
+
+    playing(el, false);
+    el.dispatchEvent(new Event("pause"));
+    expect(isProxied(el)).toBe(true);
+  });
+
+  it("asks for nothing when the video is not shown smaller than its source", async () => {
+    const el = sparseVideo("/sparse.mp4", { width: 640, height: 360 });
+
+    runtime.handleMetadataForProxy(el);
+    await settle();
+
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("waits for one copy at a time, so many sparse clips never poll together", async () => {
+    vi.useFakeTimers();
+    pending();
+    const first = sparseVideo("/first.mp4");
+    const second = sparseVideo("/second.mp4");
+    runtime.handleMetadataForProxy(first);
+    runtime.handleMetadataForProxy(second);
+
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(askedFor().length).toBeGreaterThan(1);
+    expect(askedFor().every((href) => href.includes("/first.mp4"))).toBe(true);
+
+    first.remove();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(askedFor().at(-1)).toContain("/second.mp4");
+  });
+});

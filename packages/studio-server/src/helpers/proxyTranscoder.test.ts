@@ -125,9 +125,17 @@ afterEach(() => {
   vi.resetModules();
   vi.doUnmock("node:child_process");
   vi.doUnmock("@hyperframes/parsers/ff-binaries");
+  vi.doUnmock("node:os");
   delete process.env.HYPERFRAMES_PROXY_MAX_CONCURRENCY;
   delete process.env.HYPERFRAMES_PROXY_MAX_QUEUE;
 });
+
+function mockSetPriority(setPriority: (pid: number, priority: number) => void): void {
+  vi.doMock("node:os", async (importOriginal) => {
+    const mocked = { ...(await importOriginal<typeof import("node:os")>()), setPriority };
+    return { ...mocked, default: mocked };
+  });
+}
 
 async function loadModule(
   spawn: SpawnImpl,
@@ -214,6 +222,51 @@ describe("resolveProxy", () => {
     expect(cacheDirEntries).toEqual([expectedCachePath.split("/").at(-1)]);
   });
 
+  it("makes a keyframe every second, at below-normal OS priority", async () => {
+    const setPriority = vi.fn();
+    mockSetPriority(setPriority);
+    const { spawn, calls } = createSpawnSpy();
+    const { resolveProxy } = await loadModule(
+      (...args) => Object.assign(spawn(...args), { pid: 4242 }),
+      FFMPEG_PATH,
+    );
+    const projectDir = tmpProject();
+    const sourcePath = join(projectDir, "sparse.mp4");
+    writeFileSync(sourcePath, "source-bytes");
+
+    const resultPromise = resolveProxy(projectDir, sourcePath, "h264", {
+      width: 1024,
+      height: 724,
+    });
+    await flush();
+    const args = calls[0]!.args;
+    expect(args[args.indexOf("-force_key_frames") + 1]).toBe("expr:gte(t,n_forced*1)");
+    expect(setPriority).toHaveBeenCalledWith(4242, 10);
+
+    succeed(calls[0]!);
+    await expect(resultPromise).resolves.toContain(".transcode-cache");
+  });
+
+  it("still makes the copy when the OS refuses to lower its priority", async () => {
+    mockSetPriority(() => {
+      throw new Error("EACCES");
+    });
+    const { spawn, calls } = createSpawnSpy();
+    const { resolveProxy } = await loadModule(
+      (...args) => Object.assign(spawn(...args), { pid: 4242 }),
+      FFMPEG_PATH,
+    );
+    const projectDir = tmpProject();
+    const sourcePath = join(projectDir, "sparse.mp4");
+    writeFileSync(sourcePath, "source-bytes");
+
+    const resultPromise = resolveProxy(projectDir, sourcePath);
+    await flush();
+    succeed(calls[0]!);
+
+    await expect(resultPromise).resolves.toContain(".transcode-cache");
+  });
+
   it("names the boxed preview copy resolveProxy writes when given the same box", async () => {
     const { spawn, calls } = createSpawnSpy();
     const { resolveProxy, getProxyCachePath } = await loadModule(spawn, FFMPEG_PATH);
@@ -249,6 +302,7 @@ describe("resolveProxy", () => {
     const args = calls[0]!.args;
     expect(args).toContain("libvpx");
     expect(args).not.toContain("libvpx-vp9");
+    expect(args).not.toContain("-force_key_frames");
     expect(args).toContain("yuva420p");
     expect(args).toContain("libopus");
     expect(args[args.indexOf("-b:v") + 1]).toBe("0");
