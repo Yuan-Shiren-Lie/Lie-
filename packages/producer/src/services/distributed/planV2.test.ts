@@ -699,7 +699,7 @@ describe("Plan v2 manifest", () => {
     const root = tempPath("hf-plan-v2-fps-50-");
     const v1 = createV1Plan(root, { fpsNum: 50 });
     expect(() => createPlanV2FromV1(v1, join(root, "v2"))).toThrow(
-      "dimensions.fpsNum must be 24, 25, 30, or 60",
+      "dimensions.fpsNum must be one of 24, 25, 30, 60",
     );
   });
 

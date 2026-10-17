@@ -44,7 +44,7 @@ describe("validateDistributedRenderConfig", () => {
     ["null config", null as unknown as SerializableDistributedRenderConfig, "config"],
     [
       "wrong fps",
-      { ...VALID, fps: 50 as 24 | 25 | 30 | 60 } satisfies SerializableDistributedRenderConfig,
+      { ...VALID, fps: 50 as never } satisfies SerializableDistributedRenderConfig,
       "config.fps",
     ],
     [

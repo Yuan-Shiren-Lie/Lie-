@@ -22,6 +22,7 @@ import {
   isVideoFrameFormat,
   validateEngineConfigSnapshot,
 } from "@hyperframes/engine";
+import { DISTRIBUTED_FPS, isDistributedFps } from "@hyperframes/core";
 import { type DistributedFormat } from "./shared.js";
 import { type DistributedRenderConfig } from "./plan.js";
 
@@ -48,7 +49,6 @@ export class InvalidConfigError extends Error {
   }
 }
 
-const ALLOWED_FPS = [24, 25, 30, 60] as const;
 const ALLOWED_FORMATS = [
   "mp4",
   "mov",
@@ -80,10 +80,10 @@ export function validateDistributedRenderConfig(
     throw new InvalidConfigError("config", "must be an object");
   }
 
-  if (!ALLOWED_FPS.includes(config.fps as 24 | 25 | 30 | 60)) {
+  if (!isDistributedFps(config.fps)) {
     throw new InvalidConfigError(
       "config.fps",
-      `must be one of ${ALLOWED_FPS.join(", ")}; got ${String(config.fps)}`,
+      `must be one of ${DISTRIBUTED_FPS.join(", ")}; got ${String(config.fps)}`,
     );
   }
 

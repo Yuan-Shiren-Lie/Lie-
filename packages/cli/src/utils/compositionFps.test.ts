@@ -43,7 +43,6 @@ describe("readCompositionFps", () => {
 
 describe("readAllowedCompositionFpsFromDir", () => {
   const projectDirs: string[] = [];
-  const allowedCloudFps = [24, 30, 60] as const;
 
   afterEach(() => {
     for (const dir of projectDirs.splice(0)) {
@@ -63,7 +62,7 @@ describe("readAllowedCompositionFpsFromDir", () => {
       '<div data-composition-id="root" data-root="true" data-fps="60">x</div>',
     );
 
-    expect(readAllowedCompositionFpsFromDir(dir, allowedCloudFps)).toBe(60);
+    expect(readAllowedCompositionFpsFromDir(dir)).toBe(60);
   });
 
   it("uses cloud-allowed data-fps=24 as the default", () => {
@@ -71,7 +70,15 @@ describe("readAllowedCompositionFpsFromDir", () => {
       '<div data-composition-id="root" data-root="true" data-fps="24">x</div>',
     );
 
-    expect(readAllowedCompositionFpsFromDir(dir, allowedCloudFps)).toBe(24);
+    expect(readAllowedCompositionFpsFromDir(dir)).toBe(24);
+  });
+
+  it("uses cloud-allowed data-fps=25 instead of falling back to 30", () => {
+    const dir = makeProject(
+      '<div data-composition-id="root" data-root="true" data-fps="25">x</div>',
+    );
+
+    expect(readAllowedCompositionFpsFromDir(dir)).toBe(25);
   });
 
   it("returns null for data-fps=48 so cloud callers keep their ?? 30 fallback", () => {
@@ -79,7 +86,7 @@ describe("readAllowedCompositionFpsFromDir", () => {
       '<div data-composition-id="root" data-root="true" data-fps="48">x</div>',
     );
 
-    const declared = readAllowedCompositionFpsFromDir(dir, allowedCloudFps);
+    const declared = readAllowedCompositionFpsFromDir(dir);
     expect(declared).toBeNull();
     expect(declared ?? 30).toBe(30);
   });
@@ -89,19 +96,19 @@ describe("readAllowedCompositionFpsFromDir", () => {
       '<div data-composition-id="root" data-root="true" data-fps="30000/1001">x</div>',
     );
 
-    expect(readAllowedCompositionFpsFromDir(dir, allowedCloudFps)).toBeNull();
+    expect(readAllowedCompositionFpsFromDir(dir)).toBeNull();
   });
 
   it("returns null when index.html has no data-fps", () => {
     const dir = makeProject('<div data-composition-id="root" data-root="true">x</div>');
 
-    expect(readAllowedCompositionFpsFromDir(dir, allowedCloudFps)).toBeNull();
+    expect(readAllowedCompositionFpsFromDir(dir)).toBeNull();
   });
 
   it("returns null when index.html cannot be read", () => {
     const dir = mkdtempSync(join(tmpdir(), "hyperframes-composition-fps-missing-"));
     projectDirs.push(dir);
 
-    expect(readAllowedCompositionFpsFromDir(dir, allowedCloudFps)).toBeNull();
+    expect(readAllowedCompositionFpsFromDir(dir)).toBeNull();
   });
 });

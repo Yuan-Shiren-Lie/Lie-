@@ -30,6 +30,7 @@ import {
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { DISTRIBUTED_FPS, type DistributedFps, isDistributedFps } from "@hyperframes/core";
 import { createFrameLookupTable, type ExtractedFrames } from "@hyperframes/engine";
 import { recomputePlanHashFromPlanDir, type ChunkSliceJson } from "../render/stages/freezePlan.js";
 import { canonicalJsonStringify, sha256Hex } from "../render/stages/planHash.js";
@@ -92,7 +93,7 @@ export interface PlanV2Manifest {
   readonly sourcePlanV1Hash: string;
   readonly chunkCount: number;
   readonly totalFrames: number;
-  readonly fps: 24 | 25 | 30 | 60;
+  readonly fps: DistributedFps;
   readonly width: number;
   readonly height: number;
   readonly format: DistributedFormat;
@@ -120,7 +121,7 @@ export interface PlanV2Result {
   readonly sourcePlanV1Hash: string;
   readonly chunkCount: number;
   readonly totalFrames: number;
-  readonly fps: 24 | 25 | 30 | 60;
+  readonly fps: DistributedFps;
   readonly width: number;
   readonly height: number;
   readonly format: DistributedFormat;
@@ -765,14 +766,16 @@ function readNonNegativeInteger(value: unknown, field: string): number {
   return value;
 }
 
-function readSupportedFps(value: unknown): 24 | 25 | 30 | 60 {
-  if (value !== 24 && value !== 25 && value !== 30 && value !== 60) {
-    throw new PlanV2IntegrityError("dimensions.fpsNum must be 24, 25, 30, or 60");
+function readSupportedFps(value: unknown): DistributedFps {
+  if (!isDistributedFps(value)) {
+    throw new PlanV2IntegrityError(
+      `dimensions.fpsNum must be one of ${DISTRIBUTED_FPS.join(", ")}`,
+    );
   }
   return value;
 }
 
-function readExecutionPlanFps(dimensions: Record<string, unknown>): 24 | 25 | 30 | 60 {
+function readExecutionPlanFps(dimensions: Record<string, unknown>): DistributedFps {
   const fpsDen = readPositiveInteger(dimensions.fpsDen, "dimensions.fpsDen");
   if (fpsDen !== 1) {
     throw new PlanV2IntegrityError("dimensions.fpsDen must be 1 for plan v2");

@@ -98,7 +98,7 @@ describe("parsePlanParityArgs()", () => {
       parsePlanParityArgs(["node", "plan-parity", "--v1-plan-size-cap-bytes", "-1"]),
     ).toThrow(/positive integer/);
     expect(() => parsePlanParityArgs(["node", "plan-parity", "--fps", "50"])).toThrow(
-      /24, 25, 30, or 60/,
+      /must be one of 24, 25, 30, 60/,
     );
     expect(() =>
       parsePlanParityArgs(["node", "plan-parity", "--duration-tolerance-seconds", "not-a-number"]),

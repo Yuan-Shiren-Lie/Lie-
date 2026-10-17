@@ -38,7 +38,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { extname, isAbsolute, join, relative, sep } from "node:path";
-import { type CanvasResolution, fpsToNumber } from "@hyperframes/core";
+import { type CanvasResolution, type DistributedFps, fpsToNumber } from "@hyperframes/core";
 import {
   type EngineConfig,
   type VideoFrameFormat,
@@ -103,7 +103,7 @@ import {
  */
 export interface DistributedRenderConfig {
   /** Integer frame rate. Distributed renders only accept integer fps; the in-process renderer's `Fps` rational handles NTSC. */
-  fps: 24 | 25 | 30 | 60;
+  fps: DistributedFps;
   width: number;
   height: number;
   /**
@@ -271,7 +271,7 @@ export interface LocalExecutionPlan {
   executionPlanHash: string;
   chunkCount: number;
   totalFrames: number;
-  fps: 24 | 25 | 30 | 60;
+  fps: DistributedFps;
   width: number;
   height: number;
   format: DistributedFormat;
@@ -307,7 +307,7 @@ export interface PlanResult {
   planHash: string;
   chunkCount: number;
   totalFrames: number;
-  fps: 24 | 25 | 30 | 60;
+  fps: DistributedFps;
   width: number;
   height: number;
   format: DistributedFormat;

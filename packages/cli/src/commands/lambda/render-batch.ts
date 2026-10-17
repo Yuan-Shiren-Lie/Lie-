@@ -29,7 +29,7 @@ import type {
   SerializableDistributedRenderConfig,
   SiteHandle,
 } from "@hyperframes/aws-lambda/sdk";
-import type { CanvasResolution } from "@hyperframes/core";
+import type { CanvasResolution, DistributedFps } from "@hyperframes/core";
 import { c } from "../../ui/colors.js";
 import { errorBox } from "../../ui/format.js";
 import {
@@ -61,7 +61,7 @@ export interface RenderBatchArgs {
    */
   siteId?: string;
   /** Composition config — fps/width/height/format required, rest optional. */
-  fps: 24 | 25 | 30 | 60;
+  fps: DistributedFps;
   width: number;
   height: number;
   /** See {@link RenderArgs.outputResolution}. */

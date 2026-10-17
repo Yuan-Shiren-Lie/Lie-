@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { type DistributedFps, isDistributedFps } from "@hyperframes/core";
 import { parseHTML } from "linkedom";
 
 /**
@@ -35,17 +36,12 @@ export function readCompositionFps(html: string): string | null {
 }
 
 /**
- * Cloud render backends (Lambda, Cloud Run) accept only an integer fps
- * from a small fixed allowed set (currently {24, 25, 30, 60}) — unlike local
- * `render`, they can't take an arbitrary/fractional data-fps. Reads
- * `<projectDir>/index.html` and returns its declared data-fps as a number
- * ONLY when it parses to an integer AND is a member of `allowed`;
+ * Cloud render backends (Lambda, Cloud Run) accept only `DISTRIBUTED_FPS`;
+ * unlike local `render`, they can't take an arbitrary/fractional data-fps.
+ * Returns `<projectDir>/index.html`'s declared data-fps when it is a member,
  * otherwise `null` so the caller keeps its own existing default (30).
  */
-export function readAllowedCompositionFpsFromDir(
-  projectDir: string,
-  allowed: readonly number[],
-): number | null {
+export function readAllowedCompositionFpsFromDir(projectDir: string): DistributedFps | null {
   let html: string;
   try {
     html = readFileSync(join(projectDir, "index.html"), "utf8");
@@ -55,5 +51,5 @@ export function readAllowedCompositionFpsFromDir(
   const raw = readCompositionFps(html);
   if (raw == null) return null;
   const n = Number(raw);
-  return Number.isInteger(n) && allowed.includes(n) ? n : null;
+  return isDistributedFps(n) ? n : null;
 }
