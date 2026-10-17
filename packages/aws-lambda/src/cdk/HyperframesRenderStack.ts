@@ -211,6 +211,7 @@ export class HyperframesRenderStack extends Construct {
       "PlanV2IntegrityError",
       "PLAN_ARTIFACT_DIGEST_MISMATCH",
       "FORMAT_NOT_SUPPORTED_IN_DISTRIBUTED",
+      "CHUNK_EXCEEDS_WORKER_TIMEOUT",
       "ChromeBinaryUnavailableError",
     ];
     const NON_RETRYABLE_CHUNK = [
@@ -243,6 +244,16 @@ export class HyperframesRenderStack extends Construct {
       "ChromeBinaryUnavailableError",
     ];
 
+    // Another render on the same function can still take the reserved slots; wait minutes, not 30 s.
+    const THROTTLED_RETRY: sfn.RetryProps = {
+      errors: ["Lambda.TooManyRequestsException"],
+      interval: Duration.seconds(5),
+      maxAttempts: 10,
+      backoffRate: 2,
+      maxDelay: Duration.seconds(60),
+      jitterStrategy: sfn.JitterType.FULL,
+    };
+
     const plan = new tasks.LambdaInvoke(this, "Plan", {
       lambdaFunction: this.renderFunction,
       payload: sfn.TaskInput.fromObject({
@@ -267,6 +278,7 @@ export class HyperframesRenderStack extends Construct {
       errors: NON_RETRYABLE_PLAN,
       maxAttempts: 0,
     });
+    plan.addRetry(THROTTLED_RETRY);
     plan.addRetry({
       errors: ["States.ALL"],
       interval: Duration.seconds(2),
@@ -296,6 +308,7 @@ export class HyperframesRenderStack extends Construct {
       resultPath: "$.Plan",
     });
     planV2.addRetry({ errors: NON_RETRYABLE_PLAN, maxAttempts: 0 });
+    planV2.addRetry(THROTTLED_RETRY);
     planV2.addRetry({
       errors: ["States.ALL"],
       interval: Duration.seconds(2),
@@ -340,6 +353,7 @@ export class HyperframesRenderStack extends Construct {
       errors: NON_RETRYABLE_CHUNK,
       maxAttempts: 0,
     });
+    renderChunkTask.addRetry(THROTTLED_RETRY);
     renderChunkTask.addRetry({
       errors: ["States.ALL"],
       interval: Duration.seconds(2),
@@ -388,6 +402,7 @@ export class HyperframesRenderStack extends Construct {
       errors: NON_RETRYABLE_ASSEMBLE,
       maxAttempts: 0,
     });
+    assemble.addRetry(THROTTLED_RETRY);
     assemble.addRetry({
       errors: ["States.ALL"],
       interval: Duration.seconds(2),
@@ -415,6 +430,7 @@ export class HyperframesRenderStack extends Construct {
       },
     });
     renderChunkV2Task.addRetry({ errors: NON_RETRYABLE_CHUNK, maxAttempts: 0 });
+    renderChunkV2Task.addRetry(THROTTLED_RETRY);
     renderChunkV2Task.addRetry({
       errors: ["States.ALL"],
       interval: Duration.seconds(2),
@@ -461,6 +477,7 @@ export class HyperframesRenderStack extends Construct {
       resultPath: "$.Output",
     });
     assembleV2.addRetry({ errors: NON_RETRYABLE_ASSEMBLE, maxAttempts: 0 });
+    assembleV2.addRetry(THROTTLED_RETRY);
     assembleV2.addRetry({
       errors: ["States.ALL"],
       interval: Duration.seconds(2),

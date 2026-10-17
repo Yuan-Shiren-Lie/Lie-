@@ -270,7 +270,15 @@ Resources:
                   - NotMediaPayloadError
                   - PLAN_ARTIFACT_DIGEST_MISMATCH
                   - FORMAT_NOT_SUPPORTED_IN_DISTRIBUTED
+                  - CHUNK_EXCEEDS_WORKER_TIMEOUT
                 MaxAttempts: 0
+              # Another render on the same function can still take the reserved slots; wait minutes.
+              - ErrorEquals: [Lambda.TooManyRequestsException]
+                IntervalSeconds: 5
+                MaxAttempts: 10
+                BackoffRate: 2
+                MaxDelaySeconds: 60
+                JitterStrategy: FULL
               - ErrorEquals: [States.ALL]
                 IntervalSeconds: 2
                 MaxAttempts: 4
@@ -317,8 +325,15 @@ Resources:
                   - PlanV2IntegrityError
                   - PLAN_ARTIFACT_DIGEST_MISMATCH
                   - FORMAT_NOT_SUPPORTED_IN_DISTRIBUTED
+                  - CHUNK_EXCEEDS_WORKER_TIMEOUT
                   - ChromeBinaryUnavailableError
                 MaxAttempts: 0
+              - ErrorEquals: [Lambda.TooManyRequestsException]
+                IntervalSeconds: 5
+                MaxAttempts: 10
+                BackoffRate: 2
+                MaxDelaySeconds: 60
+                JitterStrategy: FULL
               - ErrorEquals: [States.ALL]
                 IntervalSeconds: 2
                 MaxAttempts: 4
@@ -418,6 +433,12 @@ Resources:
                         - INVALID_VIDEO_METADATA
                         - PLAN_ARTIFACT_DIGEST_MISMATCH
                       MaxAttempts: 0
+                    - ErrorEquals: [Lambda.TooManyRequestsException]
+                      IntervalSeconds: 5
+                      MaxAttempts: 10
+                      BackoffRate: 2
+                      MaxDelaySeconds: 60
+                      JitterStrategy: FULL
                     - ErrorEquals: [States.ALL]
                       IntervalSeconds: 2
                       MaxAttempts: 4
@@ -460,6 +481,12 @@ Resources:
                   - PlanProtocolUnsupportedError
                   - PLAN_ARTIFACT_DIGEST_MISMATCH
                 MaxAttempts: 0
+              - ErrorEquals: [Lambda.TooManyRequestsException]
+                IntervalSeconds: 5
+                MaxAttempts: 10
+                BackoffRate: 2
+                MaxDelaySeconds: 60
+                JitterStrategy: FULL
               - ErrorEquals: [States.ALL]
                 IntervalSeconds: 2
                 MaxAttempts: 4
@@ -520,6 +547,12 @@ Resources:
                         - PLAN_ARTIFACT_DIGEST_MISMATCH
                         - ChromeBinaryUnavailableError
                       MaxAttempts: 0
+                    - ErrorEquals: [Lambda.TooManyRequestsException]
+                      IntervalSeconds: 5
+                      MaxAttempts: 10
+                      BackoffRate: 2
+                      MaxDelaySeconds: 60
+                      JitterStrategy: FULL
                     - ErrorEquals: [States.ALL]
                       IntervalSeconds: 2
                       MaxAttempts: 4
@@ -563,6 +596,12 @@ Resources:
                   - PLAN_ARTIFACT_DIGEST_MISMATCH
                   - ChromeBinaryUnavailableError
                 MaxAttempts: 0
+              - ErrorEquals: [Lambda.TooManyRequestsException]
+                IntervalSeconds: 5
+                MaxAttempts: 10
+                BackoffRate: 2
+                MaxDelaySeconds: 60
+                JitterStrategy: FULL
               - ErrorEquals: [States.ALL]
                 IntervalSeconds: 2
                 MaxAttempts: 4

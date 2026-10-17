@@ -332,6 +332,32 @@ describe("HyperframesRenderStack — snapshot", () => {
     ]);
   }, 30000);
 
+  it("fails at once when a chunk cannot fit the worker timeout, in CDK and SAM", () => {
+    for (const definition of [SYNTHED.definition, readSamDefinition()]) {
+      for (const name of ["Plan", "PlanV2"]) {
+        const errors = new Set<string>();
+        collectNonRetryableErrors(definition.States[name], errors);
+        expect({ name, terminal: errors.has("CHUNK_EXCEEDS_WORKER_TIMEOUT") }).toEqual({
+          name,
+          terminal: true,
+        });
+      }
+    }
+  });
+
+  it("gives Lambda throttles a minutes-long backoff ahead of the catch-all, in CDK and SAM", () => {
+    for (const definition of [SYNTHED.definition, readSamDefinition()]) {
+      for (const [taskName, task] of Object.entries(lambdaTasks(definition.States))) {
+        expect({ taskName, ...throttleRetry(task) }).toEqual({
+          taskName,
+          beforeCatchAll: true,
+          MaxAttempts: 10,
+          JitterStrategy: "FULL",
+        });
+      }
+    }
+  });
+
   it("lets the state machine role start, describe and stop its own child executions", () => {
     const cdkActions = Object.values(SYNTHED.template.findResources("AWS::IAM::Policy")).flatMap(
       (policy) => policyStatements(policy).flatMap((statement) => [statement.Action].flat()),
@@ -402,6 +428,19 @@ function collectNonRetryableErrors(state: unknown, out: Set<string>): void {
       for (const err of retry.ErrorEquals) out.add(err);
     }
   }
+}
+
+/** Where a task's throttle retrier sits and how hard it retries. */
+function throttleRetry(task: unknown): Record<string, unknown> {
+  const retriers = requireRecord(task, "task").Retry as Record<string, unknown>[];
+  const errors = retriers.map((retrier) => (retrier.ErrorEquals as string[]).join());
+  const at = errors.indexOf("Lambda.TooManyRequestsException");
+  const { MaxAttempts, JitterStrategy } = retriers[at] ?? {};
+  return {
+    beforeCatchAll: at >= 0 && at < errors.indexOf("States.ALL"),
+    MaxAttempts,
+    JitterStrategy,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
