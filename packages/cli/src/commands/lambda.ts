@@ -15,7 +15,7 @@ import { type CanvasResolution, DISTRIBUTED_FPS, isDistributedFps } from "@hyper
 import { parseOutputResolutionFlag } from "../utils/parseOutputResolution.js";
 import type { Example } from "./_examples.js";
 import { c } from "../ui/colors.js";
-import { readAllowedCompositionFpsFromDir } from "../utils/compositionFps.js";
+import { defaultCloudFps } from "../utils/compositionFps.js";
 
 export const examples: Example[] = [
   ["Deploy the Lambda render stack to AWS", "hyperframes lambda deploy"],
@@ -296,7 +296,7 @@ export default defineCommand({
           console.error("[lambda render] --width and --height are required.");
           failCommand();
         }
-        const fpsRaw = parseIntFlag(args.fps) ?? readAllowedCompositionFpsFromDir(projectDir) ?? 30;
+        const fpsRaw = parseIntFlag(args.fps) ?? defaultCloudFps(projectDir);
         if (!isDistributedFps(fpsRaw)) {
           console.error(
             `[lambda render] --fps must be one of ${DISTRIBUTED_FPS.join(", ")}; got ${fpsRaw}.`,
@@ -352,7 +352,7 @@ export default defineCommand({
           console.error("[lambda render-batch] --width and --height are required.");
           failCommand();
         }
-        const fpsRaw = parseIntFlag(args.fps) ?? readAllowedCompositionFpsFromDir(projectDir) ?? 30;
+        const fpsRaw = parseIntFlag(args.fps) ?? defaultCloudFps(projectDir);
         if (!isDistributedFps(fpsRaw)) {
           console.error(
             `[lambda render-batch] --fps must be one of ${DISTRIBUTED_FPS.join(", ")}; got ${fpsRaw}.`,
