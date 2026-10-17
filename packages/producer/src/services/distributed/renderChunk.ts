@@ -774,6 +774,16 @@ export async function renderChunk(
     // its own injector hook because the hook remembers the last injected frame
     // per video; sharing that state across a fresh retry page can suppress the
     // first injection and produce a blank/stale frame.
+    const deferredVideoFrames = planVideos
+      ? await extractDeferredVideoFramesForChunk({
+          planDir,
+          planVideos,
+          slice,
+          fps: { num: plan.dimensions.fpsNum, den: plan.dimensions.fpsDen },
+          outputRoot: videoFramesDir,
+          cfg,
+        })
+      : [];
     const videoFrameLookup =
       planVideos && planVideos.extracted.length > 0
         ? createFrameLookupTable(
@@ -784,14 +794,7 @@ export async function renderChunk(
                 planVideos.extracted.filter((video) => !video.deferredRange),
                 v2Manifest === null ? "dense-v1" : "sparse-v2",
               ),
-              ...(await extractDeferredVideoFramesForChunk({
-                planDir,
-                planVideos,
-                slice,
-                fps: { num: plan.dimensions.fpsNum, den: plan.dimensions.fpsDen },
-                outputRoot: videoFramesDir,
-                cfg,
-              })),
+              ...deferredVideoFrames,
             ],
             resolveRenderFpsConfig(job.config.fps).value,
           )
@@ -832,6 +835,10 @@ export async function renderChunk(
       // engine skips the `evaluateOnNewDocument` injection.
       variables: encoder.variables,
       subTimelineWaitMemo: {},
+      // The plan ships a deferred source only to chunks that show it; don't wait on the rest.
+      skipReadinessVideoIds: deferredVideoFrames
+        .filter((video) => video.framePaths.size === 0)
+        .map((video) => video.videoId),
       ...(videoCaptureBeyondViewport !== undefined
         ? { captureBeyondViewport: videoCaptureBeyondViewport }
         : {}),

@@ -20,13 +20,24 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type CaptureOptions, extractVideoFramesRange } from "@hyperframes/engine";
 import { HOST_CHROME_FAILURE_PATTERNS } from "./__test_utils__/hostChromeFailures.js";
+import { defaultLogger } from "../../logger.js";
 import { RenderQualityError } from "../renderOrchestrator.js";
 import { plan } from "./plan.js";
+import { materializePlanV2Target, planV2, readPlanV2Manifest } from "./planV2.js";
 import {
   CHUNK_INDEX_OUT_OF_RANGE,
   distributedCaptureSessionDependencies,
@@ -528,6 +539,98 @@ describe("renderChunk() — script failure", () => {
     expect(error).toBeInstanceOf(RenderQualityError);
     expect((error as Error).message).toContain("sub_timeline_script_failure");
   }, 60_000);
+});
+
+describe("renderChunk() — a video the chunk does not show", () => {
+  it("renders the same without the video's file, with no media warning", async () => {
+    if (!hasChrome) {
+      console.warn(
+        "[renderChunk.test] skipping unshown-video test — chrome-headless-shell not available on this host",
+      );
+      return;
+    }
+
+    const videoDir = join(runRoot, "project-two-videos");
+    mkdirSync(videoDir, { recursive: true });
+    for (const [name, seconds] of [
+      ["short.mp4", 2],
+      ["long.mp4", 3],
+    ] as const) {
+      const synth = spawnSync("ffmpeg", [
+        "-v",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        `testsrc2=s=64x36:r=30:d=${seconds}`,
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        join(videoDir, name),
+      ]);
+      if (synth.status !== 0) throw new Error(synth.stderr.toString());
+    }
+    writeFileSync(
+      join(videoDir, "index.html"),
+      // Clips over a second long, so the planner defers them to the chunks.
+      FIXTURE_HTML.replace('data-duration="0.16667"', 'data-duration="2.4"').replace(
+        "</div>",
+        '<video id="short" src="short.mp4" muted data-start="0" data-duration="1.2" style="position:absolute;left:0;top:0;width:64px"></video>' +
+          '<video id="long" src="long.mp4" muted data-start="0" data-duration="2.4" style="position:absolute;right:0;bottom:0;width:64px"></video></div>',
+      ),
+      "utf-8",
+    );
+    const v2Dir = join(runRoot, "plan-two-videos");
+    await planV2(
+      videoDir,
+      { fps: 30, width: 160, height: 120, format: "png-sequence", chunkSize: 36 },
+      v2Dir,
+    );
+    const manifest = readPlanV2Manifest(v2Dir);
+    expect(manifest.artifacts.find((a) => a.path === "compiled/short.mp4")?.chunks).toEqual([0]);
+
+    const without = join(runRoot, "chunk1-without-short");
+    const withShort = join(runRoot, "chunk1-with-short");
+    materializePlanV2Target(v2Dir, { role: "chunk", chunkIndex: 1 }, without);
+    cpSync(without, withShort, { recursive: true });
+    copyFileSync(join(videoDir, "short.mp4"), join(withShort, "compiled", "short.mp4"));
+
+    const warnings: unknown[] = [];
+    const skipped: (readonly string[] | undefined)[] = [];
+    const originalWarn = defaultLogger.warn;
+    const originalCreate = distributedCaptureSessionDependencies.createCaptureSession;
+    defaultLogger.warn = (message, meta) => {
+      warnings.push(meta);
+      originalWarn(message, meta);
+    };
+    distributedCaptureSessionDependencies.createCaptureSession = ((...args) => {
+      skipped.push(args[2].skipReadinessVideoIds);
+      return originalCreate(...args);
+    }) as typeof originalCreate;
+    let a, b;
+    try {
+      a = await renderChunk(without, 1, join(runRoot, "chunk1-out-without"));
+      b = await renderChunk(withShort, 1, join(runRoot, "chunk1-out-with"));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!HOST_CHROME_FAILURE_PATTERNS.test(message)) throw err;
+      console.warn(
+        "[renderChunk.test] skipping unshown-video test — host Chrome stack can't render. Diagnostic:",
+        message.slice(0, 240),
+      );
+      return;
+    } finally {
+      defaultLogger.warn = originalWarn;
+      distributedCaptureSessionDependencies.createCaptureSession = originalCreate;
+    }
+
+    expect(JSON.stringify(warnings)).not.toContain("media_load_failed");
+    // Only the unshown video is skipped; the shown one keeps today's readiness wait.
+    expect(new Set(skipped.map(String))).toEqual(new Set(["short"]));
+    expect(a.sha256).toBe(b.sha256);
+  }, 90_000);
 });
 
 describe("resolvePresetForLockedEncoder", () => {

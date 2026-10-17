@@ -288,20 +288,24 @@ function artifactTargets(
   if (path === "plan.json" || path === "meta/chunks.json" || path === "meta/encoder.json") {
     return { chunks: "all", assembler: true };
   }
-  // Each chunk's page loads every <video> src at init (a missing one fails the
-  // chunk), so deferred sources under compiled/ still go to every chunk.
+  // A compiled/ file in the map is a deferred video source. Chunks inject its
+  // frames and skip its <video> readiness, so only chunks that show it get it.
+  if (
+    path.startsWith("video-frames/") ||
+    path.startsWith("video-sources/") ||
+    (path.startsWith("compiled/") && videoDependencies?.has(path))
+  ) {
+    return {
+      chunks: videoDependencies === null ? "all" : (videoDependencies.get(path) ?? []),
+      assembler: false,
+    };
+  }
   if (
     path === "meta/composition.json" ||
     path === "meta/videos.json" ||
     path.startsWith("compiled/")
   ) {
     return { chunks: "all", assembler: false };
-  }
-  if (path.startsWith("video-frames/") || path.startsWith("video-sources/")) {
-    return {
-      chunks: videoDependencies === null ? "all" : (videoDependencies.get(path) ?? []),
-      assembler: false,
-    };
   }
   // Unknown future execution files go to both roles. Over-including is safe;
   // silently omitting a new execution dependency is not.
