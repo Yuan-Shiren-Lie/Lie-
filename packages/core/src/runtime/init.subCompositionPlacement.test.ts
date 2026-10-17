@@ -199,6 +199,29 @@ describe("runtime sub-composition placement", () => {
     expect(window.__player?.getDuration()).toBe(9);
   });
 
+  it("rests a scene's longer animation at its clip's end, where the clip hides", () => {
+    document.body.innerHTML =
+      `<div data-composition-id="main" data-root="true" data-duration="10">` +
+      `<div id="host" class="clip" data-composition-id="scene" data-start="1" data-duration="2">` +
+      `<div id="s"></div></div></div>`;
+    let renders = 0;
+    const scene = gsap
+      .timeline({ paused: true })
+      .to("#s", { x: 100, duration: 8, ease: "none", onUpdate: () => renders++ }, 0);
+    const root = gsap.timeline({ paused: true }).to({}, { duration: 10 }, 0);
+    window.__timelines = { main: root, scene } as unknown as Record<string, RuntimeTimelineLike>;
+    initSandboxRuntimeModular();
+
+    window.__player?.seek(2);
+    expect(shownX()).toBe(12.5);
+    window.__player?.seek(5);
+    expect(shownX()).toBe(25);
+    expect(getComputedStyle(document.getElementById("host")!).visibility).toBe("hidden");
+    renders = 0;
+    window.__player?.seek(6);
+    expect(renders).toBe(0);
+  });
+
   it("keeps the scene in one root after a tween first renders, when the root's own timeline is empty", async () => {
     const runFrames = stubFrames();
     document.body.innerHTML =
