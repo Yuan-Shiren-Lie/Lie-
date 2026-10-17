@@ -490,7 +490,7 @@ async function collectGridSamples(
 
 // Dense grid catches mid-motion text collisions the sparse layout grid seeks past; text-only overlap collection is cheap enough to afford it.
 const OVERLAP_SAMPLE_FPS = 8;
-// A fixed ceiling, so check's work does not grow with film length: clip windows first, then a uniform fill.
+// A fixed ceiling, so check's work does not grow with film length: half uniform, half in clip windows it misses.
 const OVERLAP_MAX_SAMPLES = 240;
 // Part of it re-looks at an overlap half a second on where the grid is too sparse to show it held.
 const OVERLAP_HOLD_PROBES = 60;
@@ -504,21 +504,60 @@ function evenlyPicked(times: number[], count: number): number[] {
   );
 }
 
+function uniformTimes(duration: number, fill: number): number[] {
+  const step = duration / Math.max(1, fill - 1);
+  return Array.from({ length: fill }, (_, i) => i * step);
+}
+
 function buildOverlapSampleTimes(duration: number, clipEdges: number[]): number[] {
   if (!Number.isFinite(duration) || duration <= 0) return [];
   const count = Math.min(
     OVERLAP_MAX_SAMPLES - OVERLAP_HOLD_PROBES,
     Math.max(2, Math.ceil(duration * OVERLAP_SAMPLE_FPS) + 1),
   );
-  const inner = clipEdges.filter((t) => t > 0 && t < duration);
-  const cuts = inner.length > 0 ? mergeSampleTimes([0, duration], inner) : [];
-  // One sample inside every stretch where the visible clips stay the same, so a short overlap is never stepped over.
-  const windows = cuts.slice(1).map((end, i) => ((cuts[i] ?? 0) + end) / 2);
-  const picked = evenlyPicked(windows, count);
-  const fill = count - picked.length;
-  const step = duration / Math.max(1, fill - 1);
-  const uniform = Array.from({ length: fill }, (_, i) => i * step);
-  return mergeSampleTimes([...picked, ...uniform].map((t) => Math.round(t * 1000) / 1000));
+  const cuts: number[] = [];
+  for (const time of mergeSampleTimes(
+    [0, duration],
+    clipEdges.filter((t) => t > 0 && t < duration),
+  ))
+    if (time - (cuts.at(-1) ?? -Infinity) >= CONTENT_OVERLAP_HELD_ERROR_MS / 1000) cuts.push(time);
+  // A stretch where the visible clips stay the same, and that the uniform half steps over, gets one sample.
+  const uncovered = (fill: number): number[] => {
+    const step = duration / Math.max(1, fill - 1);
+    return cuts.slice(1).flatMap((end, i) => {
+      const start = cuts[i] ?? 0;
+      return Math.floor(start / step) === Math.floor(end / step) ? [(start + end) / 2] : [];
+    });
+  };
+  let fill = count - Math.floor(count / 2);
+  let windows = uncovered(fill);
+  if (windows.length < count - fill) {
+    fill = count - windows.length;
+    windows = uncovered(fill);
+  }
+  const picked = evenlyPicked(windows, count - fill);
+  return mergeSampleTimes(
+    [...picked, ...uniformTimes(duration, fill)].map((t) => Math.round(t * 1000) / 1000),
+  );
+}
+
+/** Looks once more half a second on, where the grid is too sparse to show an overlap is held; each overlap once. */
+function holdProber(driver: CheckAuditDriver, collected: GridSamples, end: number) {
+  const holdS = CONTENT_OVERLAP_HELD_ERROR_MS / 1000;
+  const held = new Set<string>();
+  const keyOf = (issue: AnchoredLayoutIssue) => `${issue.code} ${issue.selector}`;
+  let probes = 0;
+  return async (time: number, next: number, issues: AnchoredLayoutIssue[]): Promise<void> => {
+    const unproven = new Set(issues.map(keyOf).filter((key) => !held.has(key)));
+    const probe = Math.round((time + holdS) * 1000) / 1000;
+    const sparse = next - time > 2 * holdS && probe <= end;
+    if (!unproven.size || !sparse || probes >= OVERLAP_HOLD_PROBES) return;
+    probes += 1;
+    await driver.seekGeometry(probe);
+    const later = await driver.collectOverlap(probe);
+    collected.layoutIssues.push(...later);
+    for (const key of later.map(keyOf)) if (unproven.has(key)) held.add(key);
+  };
 }
 
 /** Reruns content_overlap on a fine grid, unconditionally rather than gated on fingerprint change, since an animation aliased to the sparse grid collides between identical-fingerprint samples. */
@@ -535,22 +574,14 @@ async function collectMotionOverlapSamples(
   const shiftedTimes = range
     ? mergeSampleTimes(overlapTimes.map((time) => time + range[0]))
     : overlapTimes;
-  const holdS = CONTENT_OVERLAP_HELD_ERROR_MS / 1000;
-  const end = range ? range[1] : grid.duration;
-  let probes = 0;
+  const probeHold = holdProber(driver, collected, range ? range[1] : grid.duration);
   for (const [index, time] of shiftedTimes.entries()) {
     if (baseTimes.has(time)) continue;
     // Settle-free seek: collectOverlap reads getBoundingClientRect geometry, valid synchronously after setTime, so the dense pass skips the per-seek paint settle.
     await driver.seekGeometry(time);
     const issues = await driver.collectOverlap(time);
     collected.layoutIssues.push(...issues);
-    const next = shiftedTimes[index + 1] ?? Number.POSITIVE_INFINITY;
-    const probe = Math.round((time + holdS) * 1000) / 1000;
-    if (!issues.length || next - time <= 2 * holdS || probe > end || probes >= OVERLAP_HOLD_PROBES)
-      continue;
-    probes += 1;
-    await driver.seekGeometry(probe);
-    collected.layoutIssues.push(...(await driver.collectOverlap(probe)));
+    await probeHold(time, shiftedTimes[index + 1] ?? Number.POSITIVE_INFINITY, issues);
   }
 }
 
