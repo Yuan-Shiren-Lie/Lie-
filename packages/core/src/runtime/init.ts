@@ -4388,6 +4388,14 @@ export function initSandboxRuntimeModular(): void {
   let playingPollWitness = "";
   let lastTickPlaying = false;
 
+  const gsapStructureOf = (timeline: RuntimeTimelineLike): GsapStructureKey | undefined =>
+    renderCaptureSeekStarted
+      ? undefined
+      : {
+          owner: timeline,
+          version: `${compositionTimingRevision}:${timeline.getChildren?.(false, true, true).length ?? 0}`,
+        };
+
   const seekRuntimeTimeline = (
     timeline: RuntimeTimelineLike,
     timeSeconds: number,
@@ -4398,7 +4406,7 @@ export function initSandboxRuntimeModular(): void {
       const suppressEvents = options?.suppressEvents === true;
       // Guarded: a partial timeline without pause() must still get its seek.
       pauseTimelineIfPossible(timeline);
-      seekGsapTimeline(timeline, timeSeconds, suppressEvents);
+      seekGsapTimeline(timeline, timeSeconds, suppressEvents, gsapStructureOf(timeline));
     } catch (err) {
       swallow(swallowLabel, err);
     }
@@ -4584,13 +4592,8 @@ export function initSandboxRuntimeModular(): void {
       }
       try {
         if (typeof tl.totalTime === "function") {
-          const redrawn = seekGsapTimeline(tl, tlSeekTime, suppressEvents);
-          const structure = renderCaptureSeekStarted
-            ? undefined
-            : {
-                owner: tl,
-                version: `${compositionTimingRevision}:${tl.getChildren?.(false, true, true).length ?? 0}`,
-              };
+          const structure = gsapStructureOf(tl);
+          const redrawn = seekGsapTimeline(tl, tlSeekTime, suppressEvents, structure);
           if (!redrawn && !suppressEvents && !hasZeroDurationCallbackTween(tl, structure)) {
             // The first seek is the only eventful one; the re-render only refreshes styles.
             rerenderGsapTimelineAt(

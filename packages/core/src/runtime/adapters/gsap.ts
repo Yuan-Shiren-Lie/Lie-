@@ -33,10 +33,7 @@ export function rerenderGsapTimelineAt(
   );
   for (const [child] of skipped) child._ts = 0;
   try {
-    const below = t >= REDRAW_STEP;
-    timeline.totalTime(below ? t - REDRAW_STEP : t + REDRAW_STEP, true);
-    primeTweensStartingAt(children, t, below ? REDRAW_STEP : 0);
-    timeline.totalTime(t, true);
+    renderOntoInAuthoredOrder(timeline, children, t, structure);
   } finally {
     for (const [child, timeScale] of skipped) child._ts = timeScale;
     for (const [parent, dur, tDur, end, dirty] of lengths) {
@@ -47,6 +44,31 @@ export function rerenderGsapTimelineAt(
     child.ratio = ratio;
     child._zTime = zTime;
     child._act = active;
+  }
+}
+
+function renderOntoInAuthoredOrder(
+  timeline: Parameters<typeof rerenderGsapTimelineAt>[0],
+  children: unknown[],
+  t: number,
+  structure: GsapStructureKey | undefined,
+): void {
+  const below = t >= REDRAW_STEP;
+  timeline.totalTime(below ? t - REDRAW_STEP : t + REDRAW_STEP, true);
+  primeTweensStartingAt(children, t, below ? REDRAW_STEP : 0);
+  timeline.totalTime(t, true);
+  if (!below && structure) reapplyStepsInAuthoredOrder(timeline, structure, t);
+}
+
+function reapplyStepsInAuthoredOrder(
+  timeline: { getChildren?: RuntimeTimelineLike["getChildren"] },
+  structure: GsapStructureKey,
+  t: number,
+): void {
+  for (const step of stepsAt(timeline, structure, t)) {
+    const { ratio, _zTime, _act } = step;
+    step.render(0, true, true);
+    Object.assign(step, { ratio, _zTime, _act });
   }
 }
 
@@ -68,14 +90,16 @@ export function seekGsapTimeline(
   timeline: RuntimeTimelineLike,
   t: number,
   suppressEvents: boolean,
+  structure?: GsapStructureKey,
 ): boolean {
   if (typeof timeline.totalTime !== "function") {
     timeline.seek(t, suppressEvents);
     return false;
   }
-  const gsapSkipsRenderInPlace = Number(timeline.totalTime()) === t;
+  const from = Number(timeline.totalTime());
   timeline.totalTime(t, suppressEvents);
-  if (!gsapSkipsRenderInPlace || !gsapNeverRendered(timeline)) return false;
+  if (t < from && structure) reapplyStepsInAuthoredOrder(timeline, structure, t);
+  if (from !== t || !gsapNeverRendered(timeline)) return false;
   rerenderGsapTimelineAt(
     {
       totalTime: timeline.totalTime.bind(timeline),
@@ -83,6 +107,7 @@ export function seekGsapTimeline(
       getChildren: timeline.getChildren?.bind(timeline),
     },
     t,
+    structure,
   );
   return true;
 }
@@ -184,17 +209,41 @@ function firstPointFrom(points: PlacedMarks["points"], time: number): number {
   return lo;
 }
 
+function placedLandingMarks(
+  timeline: { getChildren?: RuntimeTimelineLike["getChildren"] },
+  structure: GsapStructureKey,
+): PlacedMarks {
+  let placed = landingMarksCache.get(structure.owner);
+  if (placed?.version !== structure.version) {
+    placed = placeLandingMarks(timeline, structure);
+    landingMarksCache.set(structure.owner, placed);
+  }
+  return placed;
+}
+
+function stepsAt(
+  timeline: { getChildren?: RuntimeTimelineLike["getChildren"] },
+  structure: GsapStructureKey,
+  t: number,
+): (GsapLandingMarks & {
+  render: (totalTime: number, suppressEvents: boolean, force: boolean) => unknown;
+})[] {
+  const { points } = placedLandingMarks(timeline, structure);
+  const steps = [];
+  for (let i = firstPointFrom(points, t - PLAYHEAD_FLOAT_NOISE); i < points.length; i++) {
+    if (points[i]!.at > t + PLAYHEAD_FLOAT_NOISE) break;
+    steps.push(points[i]!.mark as unknown as (typeof steps)[number]);
+  }
+  return steps;
+}
+
 function landingMarksOf(
   timeline: { getChildren?: RuntimeTimelineLike["getChildren"] },
   structure: GsapStructureKey | undefined,
   t: number,
 ): GsapLandingMarks[] {
   if (!structure) return childrenWithLandingMarksIn(timeline);
-  let placed = landingMarksCache.get(structure.owner);
-  if (placed?.version !== structure.version) {
-    placed = placeLandingMarks(timeline, structure);
-    landingMarksCache.set(structure.owner, placed);
-  }
+  const placed = placedLandingMarks(timeline, structure);
   const { points } = placed;
   const near = [...placed.always];
   const last = t + LANDING_MARK_REACH;
