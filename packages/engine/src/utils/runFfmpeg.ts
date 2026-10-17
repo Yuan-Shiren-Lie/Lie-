@@ -9,6 +9,7 @@
 import { spawn, type ChildProcess } from "child_process";
 import { getFfmpegBinary } from "./ffmpegBinaries.js";
 import { trackChildProcess } from "./processTracker.js";
+import { retrySpawnWhileLocked } from "./spawnLockRetry.js";
 import {
   ManagedChildProcess,
   type ManagedChildProcessOutcome,
@@ -199,12 +200,14 @@ const ABORTED_BEFORE_START: RunFfmpegResult = {
 };
 
 export async function runFfmpeg(args: string[], opts?: RunFfmpegOptions): Promise<RunFfmpegResult> {
-  if (opts?.signal?.aborted) return { ...ABORTED_BEFORE_START };
   const timeout = opts?.timeout ?? DEFAULT_TIMEOUT;
-  const managed = new ManagedChildProcess(spawnFfmpeg(args), {
-    signal: opts?.signal,
-    deadlineAtMs: Date.now() + timeout,
-    onStderr: opts?.onStderr,
+  return retrySpawnWhileLocked(getFfmpegBinary(), async () => {
+    if (opts?.signal?.aborted) return { ...ABORTED_BEFORE_START };
+    const managed = new ManagedChildProcess(spawnFfmpeg(args), {
+      signal: opts?.signal,
+      deadlineAtMs: Date.now() + timeout,
+      onStderr: opts?.onStderr,
+    });
+    return toResult(await managed.wait());
   });
-  return toResult(await managed.wait());
 }

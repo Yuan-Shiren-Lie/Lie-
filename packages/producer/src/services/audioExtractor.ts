@@ -9,7 +9,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { getFfmpegBinary, trackChildProcess } from "@hyperframes/engine";
+import { getFfmpegBinary, retrySpawnWhileLocked, trackChildProcess } from "@hyperframes/engine";
 
 export interface AudioElement {
   id: string;
@@ -87,6 +87,10 @@ export function parseAudioElements(html: string): AudioElement[] {
  * Run an FFmpeg command and return a promise.
  */
 function runFFmpeg(args: string[]): Promise<void> {
+  return retrySpawnWhileLocked(getFfmpegBinary(), () => runFFmpegOnce(args));
+}
+
+function runFFmpegOnce(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     // See runFfmpeg.ts: keeps a console window off the user's desktop on Windows.
     const ffmpeg = spawn(getFfmpegBinary(), args, { windowsHide: true });
