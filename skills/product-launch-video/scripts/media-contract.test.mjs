@@ -57,6 +57,63 @@ test("assemble hoists an approved timed frame video to the host root", () => {
   assert.doesNotMatch(frame, /<video\b/i);
 });
 
+const storyboardEntry = (n) =>
+  `\n## Frame ${n}\n- status: built\n- duration: 2s\n- src: compositions/frame-${n}.html\n`;
+const storyboard = (...frames) => `---\nformat: 16:9\n---\n${frames.map(storyboardEntry).join("")}`;
+const hoistableAttrs = [
+  'data-frame-video="approved"',
+  'data-frame-video-x="0" data-frame-video-y="0"',
+  'data-frame-video-width="960" data-frame-video-height="540"',
+  'src="clip.mp4" data-start="0" data-duration="1" data-track-index="0"',
+].join(" ");
+const hoistable = (id) => `<video${id ? ` id="${id}"` : ""} ${hoistableAttrs}></video>`;
+const frameHtml = (n, body) =>
+  `<html><body><div id="root" data-composition-id="frame-${n}" data-width="1920" data-height="1080">${body}</div>` +
+  `<script>window.__timelines = {}; window.__timelines["frame-${n}"] = gsap.timeline();</script></body></html>`;
+
+test("assemble gives every hoisted video a document-unique id", () => {
+  const project = mkdtempSync(join(tmpdir(), "hf-frame-video-ids-"));
+  mkdirSync(join(project, "compositions"));
+  writeFileSync(join(project, "STORYBOARD.md"), storyboard(1, 2));
+  writeFileSync(
+    join(project, "compositions", "frame-1.html"),
+    frameHtml(1, hoistable() + hoistable() + hoistable("demo")),
+  );
+  writeFileSync(join(project, "compositions", "frame-2.html"), frameHtml(2, hoistable("demo")));
+
+  const result = spawnSync(
+    process.execPath,
+    [join(skillDir, "scripts", "assemble-index.mjs"), "--hyperframes", project],
+    { encoding: "utf8" },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const index = readFileSync(join(project, "index.html"), "utf8");
+  const ids = [...index.matchAll(/<video id="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(ids, ["el-frame-1-video-0", "el-frame-1-video-1", "demo", "demo-2"]);
+});
+
+test("assemble isolates each frame host so its hoisted video stays on top", () => {
+  const project = mkdtempSync(join(tmpdir(), "hf-frame-video-layer-"));
+  mkdirSync(join(project, "compositions"));
+  writeFileSync(join(project, "STORYBOARD.md"), storyboard(1));
+  writeFileSync(
+    join(project, "compositions", "frame-1.html"),
+    frameHtml(1, '<div style="position:absolute;inset:0;z-index:5"></div>' + hoistable()),
+  );
+
+  const result = spawnSync(
+    process.execPath,
+    [join(skillDir, "scripts", "assemble-index.mjs"), "--hyperframes", project],
+    { encoding: "utf8" },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const index = readFileSync(join(project, "index.html"), "utf8");
+  assert.match(index, /\.scene \{[^}]*isolation: isolate;[^}]*\}/);
+  assert.ok(index.indexOf('class="scene"') < index.indexOf("<video "));
+});
+
 test("assemble preserves approved-video geometry through sanitized host CSS", () => {
   const project = mkdtempSync(join(tmpdir(), "hf-frame-video-layout-"));
   mkdirSync(join(project, "compositions"));

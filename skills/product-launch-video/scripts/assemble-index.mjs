@@ -185,7 +185,7 @@ function escapeHtmlAttr(value) {
 
 function approvedVideoAttrs(attrs) {
   const forwarded = [];
-  for (const name of ["id", "src", "poster", "preload", "aria-label", "data-media-start"]) {
+  for (const name of ["src", "poster", "preload", "aria-label", "data-media-start"]) {
     const value = attrValueFrom(attrs, name);
     if (value !== null) forwarded.push(`${name}="${escapeHtmlAttr(value)}"`);
   }
@@ -271,6 +271,7 @@ function hoistApprovedVideos(html, label) {
       return full;
     }
     videos.push({
+      id: attrValueFrom(attrs, "id"),
       attrs: approvedVideoAttrs(attrs),
       inner,
       start,
@@ -538,15 +539,20 @@ for (const m of mounted) {
   body.push("");
 }
 
-// Approved frame videos are mounted at the host root after frame clips. Translate
-// frame-relative timing to the global timeline and keep them off audio/frame lanes.
+// Approved frame videos are mounted at the host root after frame clips, so each is the top
+// layer of its frame. Translate frame-relative timing to the global timeline, keep them off
+// audio/frame lanes, and give every one a document-unique id.
+const hoistedIds = new Set();
 for (const [frameIndex, m] of mounted.entries()) {
-  for (const video of m.hoistedVideos ?? []) {
+  for (const [videoIndex, video] of (m.hoistedVideos ?? []).entries()) {
     const globalStart = r3(m.start + video.start);
     const track = 1000 + frameIndex * 1000 + video.track;
-    const id = /(?:^|\s)id\s*=/.test(video.attrs) ? "" : ` id="el-${m.compId}-video-${frameIndex}"`;
+    const base = video.id ?? `el-${m.compId}-video-${videoIndex}`;
+    let id = base;
+    for (let n = 2; hoistedIds.has(id); n++) id = `${base}-${n}`;
+    hoistedIds.add(id);
     body.push(
-      `      <video${id} ${video.attrs}`,
+      `      <video id="${escapeHtmlAttr(id)}" ${video.attrs}`,
       `        class="clip"`,
       ...(video.layoutStyle ? [`        style="${video.layoutStyle}"`] : []),
       `        data-start="${globalStart}"`,
@@ -718,6 +724,7 @@ const headStyle = [
   "        inset: 0;",
   "        width: 100%;",
   "        height: 100%;",
+  "        isolation: isolate;",
   "      }",
 ].join("\n");
 
