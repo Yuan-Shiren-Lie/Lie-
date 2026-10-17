@@ -1942,8 +1942,8 @@ And these drive `render` and `render-batch`:
 | `--codec`               | `h264`                              | `h264` or `h265`, MP4 only                                                                                        |
 | `--quality`             | `standard`                          | `draft`, `standard`, or `high`                                                                                    |
 | `--output-resolution`   | —                                   | Supersample via Chrome `deviceScaleFactor` to a preset (`1080p`, `4k`, `uhd`, `hd`, `landscape-4k`, …) without changing layout |
-| `--chunk-size`          | `240`                               | Frames per chunk                                                                                                  |
-| `--max-parallel-chunks` | `16`                                | Concurrent chunks per render                                                                                      |
+| `--chunk-size`          | auto                                | Frames per chunk. By default each chunk is sized to finish inside the Lambda timeout                              |
+| `--max-parallel-chunks` | auto                                | Chunks per render. By default one wave across the deploy's `--concurrency` (16 if unknown), widened when a chunk would outrun the Lambda timeout |
 | `--target-chunk-frames` | —                                   | Ceiling on frames per chunk. The planner adds chunks — up to `--max-parallel-chunks` — to stay under it, and short videos still collapse to fewer. Ignored when `--chunk-size` is set. |
 | `--variables`           | —                                   | JSON object reaching every chunk worker as `window.__hfVariables`                                                  |
 | `--variables-file`      | —                                   | Read those from a JSON file                                                                                       |

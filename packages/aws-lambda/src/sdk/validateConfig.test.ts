@@ -122,6 +122,16 @@ describe("validateDistributedRenderConfig", () => {
       "config.maxParallelChunks",
     ],
     [
+      "workerTimeoutSeconds 0",
+      { ...VALID, workerTimeoutSeconds: 0 } satisfies SerializableDistributedRenderConfig,
+      "config.workerTimeoutSeconds",
+    ],
+    [
+      "fractional workerConcurrency",
+      { ...VALID, workerConcurrency: 1.5 } satisfies SerializableDistributedRenderConfig,
+      "config.workerConcurrency",
+    ],
+    [
       "unknown runtimeCap",
       {
         ...VALID,

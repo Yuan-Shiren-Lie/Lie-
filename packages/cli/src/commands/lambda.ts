@@ -130,8 +130,16 @@ export default defineCommand({
     format: { type: "string", description: "mp4 | mov | png-sequence | webm (default: mp4)" },
     codec: { type: "string", description: "h264 | h265 (mp4 only)" },
     quality: { type: "string", description: "draft | standard | high" },
-    "chunk-size": { type: "string", description: "Frames per chunk (default: 240)" },
-    "max-parallel-chunks": { type: "string", description: "Max concurrent chunks (default: 16)" },
+    "chunk-size": {
+      type: "string",
+      description:
+        "Frames per chunk (default: sized so each chunk fits the Lambda timeout, one wave across --concurrency)",
+    },
+    "max-parallel-chunks": {
+      type: "string",
+      description:
+        "Max chunks per render (default: one wave across the deploy's --concurrency, widened to fit the Lambda timeout)",
+    },
     "target-chunk-frames": {
       type: "string",
       description:
