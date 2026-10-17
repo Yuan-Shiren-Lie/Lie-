@@ -31,7 +31,7 @@ A short design-led motion graphic. **Asset-first**: decide the asset strategy an
 | plan     | subagent — **decide search?** + classify + asset strategy             | `shot-plan.json` (draft: category, `asset_needs` queries, brief) | `agents/director.md` (Part 1) |
 | source ◇ | Bash — media-use resolve (**skip if `asset_needs` is empty**)         | `assets/` + `assets/index.md`                                    | `phases/source/guide.md`      |
 | design   | subagent — shot design around resolved assets                         | `shot-plan.json` (final: block(s) + layout + motion + positions) | `agents/director.md` (Part 2) |
-| build    | subagent — reuse-first composition                                    | `compositions/index.html`                                        | `agents/builder.md`           |
+| build    | subagent — reuse-first composition                                    | `index.html` (project root)                                      | `agents/builder.md`           |
 | verify   | Bash — `lint`, `check`, proof snapshots; repair on failure            | `.hyperframes/artifacts/snapshots/<id>/contact-sheet.jpg`        | Step 5                        |
 | approve  | Open the preview; ask render or changes; wait for the answer          | explicit render approval                                         | Step 6                        |
 | render   | Bash — `hyperframes render` (MP4, or `--format webm/mov` for overlay) | `renders/video.mp4` or transparent overlay                       | Step 6                        |
@@ -118,7 +118,7 @@ Dispatch a subagent (prompt = `agents/director.md` Part 2 + dispatch context inc
 
 Include the shared [motion principles](../hyperframes-creative/references/motion-principles.md) in the Builder's dispatch context. For `charts` and `stat`, also include [data in motion](../hyperframes-creative/references/data-in-motion.md). The Builder reads these guides before writing the timeline.
 
-Dispatch a subagent. prompt = full `agents/builder.md` + dispatch context (`shot-plan.json`, `catalog-map.md`, the category's `module.md`, `references/motion-vocabulary.md`, `references/builder-contract.md`). **Reuse-first**: `npx hyperframes add <block>` + customize in place; hand-author only gaps + the asset-fusion affordance. Output `compositions/index.html` honoring the HF contract (paused GSAP timeline on `window.__timelines`, `class="clip"` + stable ids, `tl.seek(0)`, deterministic).
+Dispatch a subagent. prompt = full `agents/builder.md` + dispatch context (shot-plan.json, `catalog-map.md`, the category's `module.md`, `references/motion-vocabulary.md`, `references/builder-contract.md`). **Reuse-first**: `npx hyperframes add <block>` + customize in place; hand-author only gaps + the asset-fusion affordance. Output the project's root `index.html` — the scaffold's main composition that `check`, `snapshot` and `render` target by default (`compositions/` holds only blocks added via `hyperframes add`, mounted from `index.html` via `data-composition-src`). Honor the HF contract (paused GSAP timeline on `window.__timelines`, `class="clip"` + stable ids, `tl.seek(0)`, deterministic).
 
 ### Step 5 — Verify (Bash → repair subagent on failure)
 
@@ -152,8 +152,8 @@ Verify the output exists, is non-empty, and has the intended duration. The final
 | -------------------------------------------------------- | -------------------------- |
 | no `shot-plan.json`                                      | Step 1 (plan)              |
 | `shot-plan.json` has `asset_needs`, no `assets/`         | Step 2 (source)            |
-| `shot-plan.json` final, no `compositions/index.html`     | Step 3/4 (design+build)    |
-| `compositions/index.html` exists, proof snapshots absent | Step 5 (verify)            |
+| `shot-plan.json` final, root `index.html` still scaffold | Step 3/4 (design+build)    |
+| root `index.html` authored, proof snapshots absent       | Step 5 (verify)            |
 | checks and proof snapshots pass, no approved render      | Step 6 (approval)          |
 | approved render exists                                   | verify output, then report |
 
@@ -166,9 +166,10 @@ Verify the output exists, is non-empty, and has the intended duration. The final
   ```
   videos/<project-name>/
     hyperframes.json  context.log
+    index.html                # main composition — Builder output
+    compositions/             # blocks added via `hyperframes add` (mounted from index.html)
     shot-plan.json            # the IR (Director output)
     assets/  assets/index.md  # media-use output (if sourced)
-    compositions/index.html   # Builder output
     renders/video.mp4
   ```
 - **Registration:** in `hyperframes` router — add the "design-led short motion graphic" intent + Workflow description; carve the motion-graphics triggers out of `/general-video`; add reverse Do-NOT-use edges. See `motion-graphics-genre.md` §5-7.

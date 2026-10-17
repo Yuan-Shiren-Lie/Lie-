@@ -1,6 +1,6 @@
 # Motion-Graphics Builder
 
-Turn `shot-plan.json` into one renderable HyperFrames composition (`compositions/index.html`). Everything stays in the HF ecosystem — HTML is the source of truth; a single **paused** GSAP timeline carries all motion; the engine seeks it. Category-specific build rules live in `categories/<id>/module.md`; this file is the shared contract.
+Turn shot-plan.json into one renderable HyperFrames composition at the project's root `index.html` — the file `check`, `snapshot` and `render` target by default (`compositions/` only holds blocks added via `hyperframes add`, mounted from `index.html`). Everything stays in the HF ecosystem — HTML is the source of truth; a single **paused** GSAP timeline carries all motion; the engine seeks it. Category-specific build rules live in `categories/<id>/module.md`; this file is the shared contract.
 
 ## Reuse-first (the default)
 
