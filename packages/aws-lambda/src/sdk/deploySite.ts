@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HeadObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { hashProjectDir } from "@hyperframes/producer/distributed";
+import { hashProjectDir, listSiteFiles } from "@hyperframes/producer/distributed";
 import { formatS3Uri, tarDirectory, uploadFileToS3 } from "../s3Transport.js";
 
 /** Options for {@link deploySite}. */
@@ -65,7 +65,8 @@ export async function deploySite(opts: DeploySiteOptions): Promise<SiteHandle> {
     throw new Error(`[deploySite] projectDir is not a directory: ${opts.projectDir}`);
   }
 
-  const siteId = opts.siteId ?? hashProjectDir(opts.projectDir);
+  const files = listSiteFiles(opts.projectDir);
+  const siteId = opts.siteId ?? hashProjectDir(opts.projectDir, files);
   const key = `sites/${siteId}/project.tar.gz`;
   const projectS3Uri = formatS3Uri({ bucket: opts.bucketName, key });
   const s3 = opts.s3 ?? new S3Client({ region: opts.region });
@@ -88,12 +89,7 @@ export async function deploySite(opts: DeploySiteOptions): Promise<SiteHandle> {
   const workdir = mkdtempSync(join(tmpdir(), "hf-deploy-site-"));
   try {
     const tarball = join(workdir, "project.tar.gz");
-    await tarDirectory(opts.projectDir, tarball);
-    // Note: tarDirectory packs *everything* under `cwd`. We don't need to
-    // re-implement the skip list inside the tar pack because the
-    // producer's plan stage applies the same skip during its copy; the
-    // archive is slightly bigger than the planDir's compiled/ subtree
-    // but the cost is bounded by the project's user-authored content.
+    await tarDirectory(opts.projectDir, tarball, files);
     const size = statSync(tarball).size;
     await uploadFileToS3(s3, tarball, projectS3Uri, "application/gzip");
     return {

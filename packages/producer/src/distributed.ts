@@ -115,7 +115,7 @@ export {
   validateDistributedRenderConfig,
   validateVariablesPayload,
 } from "./services/distributed/renderConfigValidation.js";
-export { hashProjectDir } from "./services/distributed/projectHash.js";
+export { hashProjectDir, listSiteFiles } from "./services/distributed/projectHash.js";
 
 // ── Plan protocol compatibility ────────────────────────────────────────────
 // Workers validate this descriptor before consuming layout-specific

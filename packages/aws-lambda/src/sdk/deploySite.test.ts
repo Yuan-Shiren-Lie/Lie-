@@ -1,15 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { S3Client } from "@aws-sdk/client-s3";
+import * as tar from "tar";
 import { asS3Client, FakeS3 } from "./__fixtures__/fakeS3.js";
 import { deploySite } from "./deploySite.js";
 
 let projectDir: string;
+let scratch: string;
 
 beforeEach(() => {
   projectDir = mkdtempSync(join(tmpdir(), "hf-deploy-site-test-"));
+  scratch = mkdtempSync(join(tmpdir(), "hf-deploy-site-scratch-"));
   mkdirSync(join(projectDir, "assets"));
   writeFileSync(join(projectDir, "index.html"), "<html><body>hi</body></html>");
   writeFileSync(join(projectDir, "assets", "style.css"), "body { color: red; }");
@@ -17,7 +20,16 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(projectDir, { recursive: true, force: true });
+  rmSync(scratch, { recursive: true, force: true });
 });
+
+async function uploadedEntries(s3: FakeS3, siteId: string): Promise<string[]> {
+  const file = join(scratch, "uploaded.tar.gz");
+  writeFileSync(file, s3.bodies.get(`test-bucket/sites/${siteId}/project.tar.gz`) ?? "");
+  const entries: string[] = [];
+  await tar.list({ file, onReadEntry: (entry) => entries.push(`${entry.type} ${entry.path}`) });
+  return entries;
+}
 
 describe("deploySite", () => {
   it("uploads the tarball when no matching object exists", async () => {
@@ -144,5 +156,26 @@ describe("deploySite", () => {
 
     // node_modules contents shouldn't move the hash.
     expect(after.siteId).toBe(before.siteId);
+  });
+
+  it("packs a symlinked project and its symlinked files and folders as content", async () => {
+    mkdirSync(join(scratch, "media"));
+    writeFileSync(join(scratch, "media", "clip.txt"), "clip");
+    writeFileSync(join(scratch, "logo.txt"), "logo");
+    symlinkSync(join(scratch, "media"), join(projectDir, "media"));
+    symlinkSync(join(scratch, "logo.txt"), join(projectDir, "logo.txt"));
+    symlinkSync(projectDir, join(scratch, "fx"));
+    const s3 = new FakeS3();
+    const result = await deploySite({
+      projectDir: join(scratch, "fx"),
+      bucketName: "test-bucket",
+      s3: asS3Client(s3),
+    });
+    expect(await uploadedEntries(s3, result.siteId)).toEqual([
+      "File assets/style.css",
+      "File index.html",
+      "File logo.txt",
+      "File media/clip.txt",
+    ]);
   });
 });

@@ -8,6 +8,7 @@
  * `deploySite`'s `finally` block has rmSync'd it.
  */
 
+import { buffer } from "node:stream/consumers";
 import type { S3Client } from "@aws-sdk/client-s3";
 
 export interface FakeS3Op {
@@ -19,6 +20,7 @@ export interface FakeS3Op {
 export class FakeS3 {
   ops: FakeS3Op[] = [];
   existing = new Set<string>();
+  bodies = new Map<string, Buffer>();
 
   async send(command: unknown): Promise<unknown> {
     const cmdName = (command as { constructor: { name: string } }).constructor.name;
@@ -39,7 +41,12 @@ export class FakeS3 {
     if (cmdName === "PutObjectCommand") {
       this.ops.push({ kind: "put", bucket: input.Bucket, key: input.Key });
       this.existing.add(`${input.Bucket}/${input.Key}`);
-      await drainBody((command as { input: { Body: NodeJS.ReadableStream | Buffer } }).input.Body);
+      this.bodies.set(
+        `${input.Bucket}/${input.Key}`,
+        await drainBody(
+          (command as { input: { Body: NodeJS.ReadableStream | Buffer } }).input.Body,
+        ),
+      );
       return {};
     }
     throw new Error(`FakeS3: unexpected command ${cmdName}`);
@@ -58,12 +65,6 @@ export function asS3Client(fake: FakeS3): S3Client {
  * the workdir — surfacing as an "Unhandled error between tests"
  * teardown noise that bun's runner attributes to the next test.
  */
-async function drainBody(body: NodeJS.ReadableStream | Buffer): Promise<void> {
-  if (Buffer.isBuffer(body)) return;
-  await new Promise<void>((resolve, reject) => {
-    body.on("data", () => {});
-    body.on("end", () => resolve());
-    body.on("close", () => resolve());
-    body.on("error", reject);
-  });
+async function drainBody(body: NodeJS.ReadableStream | Buffer): Promise<Buffer> {
+  return Buffer.isBuffer(body) ? body : buffer(body);
 }
