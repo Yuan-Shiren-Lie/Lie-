@@ -244,7 +244,6 @@ export class HyperframesRenderStack extends Construct {
       "ChromeBinaryUnavailableError",
     ];
 
-    // Another render on the same function can still take the reserved slots; wait minutes, not 30 s.
     const THROTTLED_RETRY: sfn.RetryProps = {
       errors: ["Lambda.TooManyRequestsException"],
       interval: Duration.seconds(5),
@@ -320,8 +319,7 @@ export class HyperframesRenderStack extends Construct {
     const buildChunkList = new sfn.Pass(this, "BuildChunkList", {
       parameters: {
         "ChunkIndexes.$": "States.ArrayRange(0, States.MathAdd($.Plan.ChunkCount, -1), 1)",
-        // Chunks past the Lambda's reserved concurrency would be throttled and burn their
-        // retries; queue them in the Map instead. 0 = no cap beyond the chunk count.
+        // Queue chunks past reserved concurrency instead of letting Lambda throttle them; 0 = no cap.
         MaxChunkConcurrency: reservedConcurrency ?? 0,
       },
       resultPath: "$.Iterator",
@@ -364,8 +362,7 @@ export class HyperframesRenderStack extends Construct {
 
     const renderChunks = new sfn.DistributedMap(this, "RenderChunks", {
       label: "RenderChunks",
-      // Inline Map runs at most 40 iterations at once. STANDARD children because EXPRESS
-      // ones stop at 5 minutes and a chunk may run for the Lambda's full 15.
+      // STANDARD children: EXPRESS ones stop at 5 minutes and a chunk may run the Lambda's full 15.
       mapExecutionType: sfn.StateMachineType.STANDARD,
       itemsPath: "$.Iterator.ChunkIndexes",
       itemSelector: {
