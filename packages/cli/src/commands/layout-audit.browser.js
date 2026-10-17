@@ -800,6 +800,9 @@
       time,
       selector: uniqueSelectorFor(a.element),
       containerSelector: uniqueSelectorFor(b.element),
+      overlapFraction:
+        fragmentIntersectionArea(glyphRects(a), glyphRects(b)) /
+        Math.min(rectsArea(glyphRects(a)), rectsArea(glyphRects(b))),
       text: textContentFor(a.element),
       message: "Two text blocks overlap and may render unreadable.",
       rect: a.rect,
@@ -2282,6 +2285,8 @@
       text,
       rect,
       elementRect,
+      visible: isVisibleElement(element, 0.05),
+      fullyVisible: opacityChain(element) === 1 && getComputedStyle(element).filter === "none",
       ...candidateAnchor(element),
       ...(overflow ? { overflow } : {}),
     };
