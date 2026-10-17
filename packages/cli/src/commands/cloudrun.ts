@@ -29,7 +29,7 @@ import {
   validateVariablesAgainstProject,
 } from "../utils/variables.js";
 import { normalizeErrorMessage } from "../utils/errorMessage.js";
-import { readAllowedCompositionFpsFromDir } from "../utils/compositionFps.js";
+import { defaultCloudFps } from "../utils/compositionFps.js";
 import { DISTRIBUTED_FPS, type DistributedFps, isDistributedFps } from "@hyperframes/core";
 
 export const examples: Example[] = [
@@ -531,7 +531,7 @@ function resolveCloudRunFps(
   projectDir: string,
   command: "render" | "render-batch",
 ): DistributedFps {
-  const fps = parseIntFlag(args.fps) ?? readAllowedCompositionFpsFromDir(projectDir) ?? 30;
+  const fps = parseIntFlag(args.fps) ?? defaultCloudFps(projectDir);
   if (isDistributedFps(fps)) return fps;
   console.error(
     `[cloudrun ${command}] --fps must be one of ${DISTRIBUTED_FPS.join(", ")}; got ${fps}.`,

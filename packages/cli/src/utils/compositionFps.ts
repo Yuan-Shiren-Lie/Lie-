@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { type DistributedFps, isDistributedFps } from "@hyperframes/core";
+import { DISTRIBUTED_FPS, type DistributedFps, isDistributedFps } from "@hyperframes/core";
 import { parseHTML } from "linkedom";
+import { c } from "../ui/colors.js";
 
 /**
  * Read a composition's declared frame rate from its root element's `data-fps`
@@ -35,21 +36,29 @@ export function readCompositionFps(html: string): string | null {
   return raw ? raw : null;
 }
 
+const DEFAULT_CLOUD_FPS: DistributedFps = 30;
+
 /**
- * Cloud render backends (Lambda, Cloud Run) accept only `DISTRIBUTED_FPS`;
- * unlike local `render`, they can't take an arbitrary/fractional data-fps.
- * Returns `<projectDir>/index.html`'s declared data-fps when it is a member,
- * otherwise `null` so the caller keeps its own existing default (30).
+ * Cloud render fps when `--fps` is not passed: `<projectDir>/index.html`'s
+ * data-fps if it is in `DISTRIBUTED_FPS`, otherwise 30, with a warning when the
+ * project declared a rate cloud renders cannot use.
  */
-export function readAllowedCompositionFpsFromDir(projectDir: string): DistributedFps | null {
+export function defaultCloudFps(projectDir: string): DistributedFps {
   let html: string;
   try {
     html = readFileSync(join(projectDir, "index.html"), "utf8");
   } catch {
-    return null;
+    return DEFAULT_CLOUD_FPS;
   }
   const raw = readCompositionFps(html);
-  if (raw == null) return null;
+  if (raw == null) return DEFAULT_CLOUD_FPS;
   const n = Number(raw);
-  return isDistributedFps(n) ? n : null;
+  if (isDistributedFps(n)) return n;
+  console.warn(
+    c.warn(
+      `The composition declares data-fps="${raw}", which cloud renders do not support ` +
+        `(${DISTRIBUTED_FPS.join(", ")}). Rendering at ${DEFAULT_CLOUD_FPS} fps; pass --fps to choose.`,
+    ),
+  );
+  return DEFAULT_CLOUD_FPS;
 }
