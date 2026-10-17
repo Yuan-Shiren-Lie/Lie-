@@ -663,7 +663,9 @@ async function handleAssembleV2(
     // `downloadAndMaterializePlanV2` materializes atomically. Audio is
     // assembler-only and lives at the familiar v1-compatible location.
     const audioPath = resolvePlanAudioPath(planDir);
+    const chunksStarted = Date.now();
     const chunkPaths = await downloadChunkObjects(s3, event.ChunkS3Uris, work, event.Format);
+    const chunksMs = Date.now() - chunksStarted;
     const finalOutput =
       event.Format === "png-sequence"
         ? join(work, "output-frames")
@@ -671,6 +673,7 @@ async function handleAssembleV2(
     const result = await primitive(planDir, chunkPaths, audioPath, finalOutput, {
       cfr: event.Cfr === true,
     });
+    const uploadStarted = Date.now();
     if (event.Format === "png-sequence") {
       const tarball = `${finalOutput}.tar.gz`;
       await tarDirectory(finalOutput, tarball);
@@ -678,6 +681,13 @@ async function handleAssembleV2(
     } else {
       await uploadFileToS3(s3, finalOutput, event.OutputS3Uri);
     }
+    logEvent({
+      event: "assemble_stages",
+      planMs: chunksStarted - started,
+      chunksMs,
+      assembleMs: result.durationMs,
+      uploadMs: Date.now() - uploadStarted,
+    });
     return {
       Action: "assemble",
       OutputS3Uri: event.OutputS3Uri,
