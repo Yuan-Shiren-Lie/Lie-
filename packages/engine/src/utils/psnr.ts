@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -42,4 +42,75 @@ export async function psnrDb(a: Buffer, b: Buffer): Promise<number> {
 export function resolveDeVerifyMinDb(): number {
   const raw = Number(process.env.HF_DE_VERIFY_MIN_DB ?? "32");
   return Number.isFinite(raw) && raw >= 10 && raw <= 60 ? raw : 32;
+}
+
+/**
+ * Worst-region mean signed channel shift between two same-dimension encoded
+ * images, in 1/255 units (0 = identical; 127 = saturated).
+ *
+ * psnrDb is a magnitude average a correct background dilutes arbitrarily, so
+ * a fully-missing low-contrast element can still clear it (#3345). One ffmpeg
+ * pass: grainextract centers the signed A−B on mid-gray (128), then the area
+ * downscale makes each ~96px region a cell whose |cell−128| is its mean
+ * shift — encoder noise cancels inside a region, an absent element cannot.
+ */
+export async function regionShift(a: Buffer, b: Buffer): Promise<number> {
+  // Lazy promisify, same reason as psnrDb above.
+  const execFileP = promisify(execFile);
+  const dir = await mkdtemp(join(tmpdir(), "hf-de-verify-"));
+  try {
+    const pa = join(dir, "a.jpg");
+    const pb = join(dir, "b.jpg");
+    const outPath = join(dir, "shift.raw");
+    await Promise.all([writeFile(pa, a), writeFile(pb, b)]);
+    await execFileP(
+      getFfmpegBinary(),
+      [
+        "-hide_banner",
+        "-i",
+        pa,
+        "-i",
+        pb,
+        "-lavfi",
+        "[0:v]format=rgb24[ga];[1:v]format=rgb24[gb];" +
+          "[ga][gb]blend=all_mode=grainextract," +
+          "scale='ceil(iw/96)':'ceil(ih/96)':flags=area",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-y",
+        outPath,
+      ],
+      { maxBuffer: 4 * 1024 * 1024 },
+    );
+    const raw = await readFile(outPath);
+    if (raw.length === 0) {
+      throw new Error("regionShift parse failed: empty rawvideo output");
+    }
+    let max = 0;
+    for (const byte of raw) {
+      const shift = Math.abs(byte - 128);
+      if (shift > max) max = shift;
+    }
+    return max;
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * The drawElement self-verify region-shift ceiling (1/255 channel units), or
+ * undefined when HF_DE_VERIFY_MAX_SHIFT is unset: the gate is observe-only
+ * by default, so the shift is still measured and logged per verified sample
+ * but a breach feeds `verifyMaxShiftObserved` telemetry instead of falling
+ * back: fixture calibration found clean renders sitting at 18-27/255 on
+ * compositor-animated content, where any hard default trips. A set value in
+ * [1, 64] turns the gate on at that ceiling.
+ */
+export function resolveDeVerifyMaxShift(): number | undefined {
+  const raw = process.env.HF_DE_VERIFY_MAX_SHIFT;
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 1 && n <= 64 ? n : undefined;
 }

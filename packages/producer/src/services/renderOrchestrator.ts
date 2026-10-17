@@ -634,6 +634,8 @@ export interface RenderPerfSummary {
     verifyChecked: number;
     /** Minimum PSNR across checked samples (dB; margin above the 32dB threshold). */
     verifyMinDb?: number;
+    /** Max worst-region mean shift (1/255) across checked samples; the observe-only shift gate's tuning signal. */
+    verifyMaxShiftObserved?: number;
     /** Init cost of capturing ground truth (ms). */
     verifyInitMs: number;
     /**
@@ -643,14 +645,18 @@ export interface RenderPerfSummary {
      * `fallbackReason` being set is the "any fallback fired" signal.
      */
     selfVerifyFallback: boolean;
-    /** What tripped the fallback retry: psnr | blank | oom | de_renderer_stall | encoder_death | parallel_stall | capture_error. */
+    /** What tripped the fallback retry: psnr | shift | blank | oom | de_renderer_stall | encoder_death | parallel_stall | capture_error. */
     fallbackReason?: string;
     /** The failing PSNR (dB) when `fallbackReason === "psnr"`; undefined for every other reason (no score exists). */
     fallbackFailedDb?: number;
-    /** Frame index the verification failure was detected at; set for both "psnr" and "blank" fallback reasons. */
+    /** Frame index the verification failure was detected at; set for "psnr", "shift", and "blank" fallback reasons. */
     fallbackFrameIndex?: number;
     /** The HF_DE_VERIFY_MIN_DB threshold the failing dB breached; only set alongside fallbackFailedDb (psnr reason). */
     fallbackThresholdDb?: number;
+    /** The failing worst-region mean shift (1/255) when `fallbackReason === "shift"`; undefined for every other reason (no score exists). */
+    fallbackFailedShift?: number;
+    /** The HF_DE_VERIFY_MAX_SHIFT ceiling the failing shift breached; only set alongside fallbackFailedShift (shift reason). */
+    fallbackMaxShift?: number;
     /** Blank-guard counters. */
     blankSuspects: number;
     blankDeterministicAccepts: number;
@@ -2738,10 +2744,12 @@ export function shouldDiscardProbeSessionForPageSideCompositing(args: {
  * cross-module-serialized error can't flip "blank" into "psnr".
  */
 function deVerifyFallbackTelemetry(err: unknown): {
-  reason: "psnr" | "blank";
+  reason: "psnr" | "blank" | "shift";
   failedDb?: number;
   frameIndex?: number;
   thresholdDb?: number;
+  failedShift?: number;
+  verifyMaxShift?: number;
 } {
   const details = getDrawElementVerificationDetails(err);
   return {
@@ -2749,6 +2757,8 @@ function deVerifyFallbackTelemetry(err: unknown): {
     failedDb: roundDb(details?.failedDb),
     frameIndex: details?.frameIndex,
     thresholdDb: roundDb(details?.verifyThresholdDb),
+    failedShift: details?.failedShift,
+    verifyMaxShift: details?.verifyMaxShift,
   };
 }
 
@@ -3114,6 +3124,8 @@ async function executeRenderPipeline(input: {
     let deFallbackFailedDb: number | undefined;
     let deFallbackFrameIndex: number | undefined;
     let deFallbackThresholdDb: number | undefined;
+    let deFallbackFailedShift: number | undefined;
+    let deFallbackMaxShift: number | undefined;
     let deDrainStats: import("./render/stages/captureStreamingStage.js").DeDrainStats | undefined;
     updateCaptureObservability({ forceScreenshot: captureForceScreenshot });
     observability.checkpoint("compile", "composition metadata resolved", {
@@ -4675,6 +4687,8 @@ async function executeRenderPipeline(input: {
             deFallbackFailedDb = t.failedDb;
             deFallbackFrameIndex = t.frameIndex;
             deFallbackThresholdDb = t.thresholdDb;
+            deFallbackFailedShift = t.failedShift;
+            deFallbackMaxShift = t.verifyMaxShift;
           } else {
             deFallbackReason = isMemoryExhaustion
               ? "oom"
@@ -4730,6 +4744,8 @@ async function executeRenderPipeline(input: {
             deFallbackFailedDb,
             deFallbackFrameIndex,
             deFallbackThresholdDb,
+            deFallbackFailedShift,
+            deFallbackMaxShift,
             workerCount: capturePlan.workerCount,
             useStreamingEncode: capturePlan.kind === "sdr_streaming",
             deWorkerInversion,
@@ -4881,6 +4897,8 @@ async function executeRenderPipeline(input: {
           deFallbackFailedDb = t.failedDb;
           deFallbackFrameIndex = t.frameIndex;
           deFallbackThresholdDb = t.thresholdDb;
+          deFallbackFailedShift = t.failedShift;
+          deFallbackMaxShift = t.verifyMaxShift;
           log.warn(
             "[Render] drawElement capture failed on the parallel disk path; " +
               "re-rendering via screenshot",
@@ -4920,6 +4938,8 @@ async function executeRenderPipeline(input: {
             deFallbackFailedDb,
             deFallbackFrameIndex,
             deFallbackThresholdDb,
+            deFallbackFailedShift,
+            deFallbackMaxShift,
           });
           if (capturePlan.kind !== "sdr_disk") {
             throw new Error(`Disk verify retry requires sdr_disk plan; got ${capturePlan.kind}`);
@@ -5119,6 +5139,8 @@ async function executeRenderPipeline(input: {
         fallbackFailedDb: deFallbackFailedDb,
         fallbackFrameIndex: deFallbackFrameIndex,
         fallbackThresholdDb: deFallbackThresholdDb,
+        fallbackFailedShift: deFallbackFailedShift,
+        fallbackMaxShift: deFallbackMaxShift,
         drainStats: deDrainStats,
       },
       hdrDiagnostics,

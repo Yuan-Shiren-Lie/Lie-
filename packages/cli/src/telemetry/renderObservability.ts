@@ -65,6 +65,8 @@ export function renderObservabilityTelemetryPayload(
     captureDeFallbackFailedDb: capture.deFallbackFailedDb,
     captureDeFallbackFrameIndex: capture.deFallbackFrameIndex,
     captureDeFallbackThresholdDb: capture.deFallbackThresholdDb,
+    captureDeFallbackFailedShift: capture.deFallbackFailedShift,
+    captureDeFallbackMaxShift: capture.deFallbackMaxShift,
     captureParallelStream: capture.captureParallelStream,
     captureChromeBrowserRssPeakMb: capture.chromeBrowserRssPeakMb,
     captureChromeRendererRssPeakMb: capture.chromeRendererRssPeakMb,

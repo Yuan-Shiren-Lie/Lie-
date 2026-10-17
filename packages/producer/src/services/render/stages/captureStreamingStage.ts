@@ -62,6 +62,8 @@ import {
   executeParallelCapture,
   getCapturePerfSummary,
   psnrDb,
+  regionShift,
+  resolveDeVerifyMaxShift,
   resolveDeVerifyMinDb,
   recaptureDrawElementFrameForVerify,
   completeDeferredDrawElementInit,
@@ -282,6 +284,8 @@ export interface CaptureStreamingStageInput {
 export interface DeDrainStats {
   verifyChecked: number;
   verifyMinDb?: number;
+  /** Max worst-region mean shift (1/255) seen across verified samples; the observe-only gate's tuning signal. */
+  verifyMaxShiftObserved?: number;
   blankSuspects: number;
   blankDeterministicAccepts: number;
   blankRecaptures: number;
@@ -333,9 +337,12 @@ function createDrainFrameGuard(args: {
   //    by the PSNR verify samples rather than the size heuristic, which has
   //    no stable median yet.
   // 2. Self-verification: at K sampled indices, compare the DE frame against
-  //    its pre-injection screenshot ground truth (session.deVerifyFrames).
-  //    PSNR below HF_DE_VERIFY_MIN_DB (default 32; natural DE-vs-screenshot
-  //    agreement measures ≥45, damage <30) → verification error.
+  //    its pre-injection screenshot ground truth (session.deVerifyFrames):
+  //    a. PSNR below HF_DE_VERIFY_MIN_DB (default 32) fails closed: a
+  //       whole-frame magnitude average a missing low-contrast element gets
+  //       diluted under (#3345).
+  //    b. Region shift above HF_DE_VERIFY_MAX_SHIFT (observe-only when unset;
+  //       1/255 worst ~96px region mean): encoder noise cancels, absence cannot.
   // A DrawElementVerificationError propagates to the orchestrator, which
   // re-renders the whole job via the screenshot path (never-wrong fallback).
   // Clamp to a defensible band: below ~10dB even severe damage passes (the
@@ -346,10 +353,17 @@ function createDrainFrameGuard(args: {
   // never apply different PSNR floors to the same composition. The warn stays
   // here because only this path has a logger in scope.
   const verifyMinDb = resolveDeVerifyMinDb();
+  const verifyMaxShift = resolveDeVerifyMaxShift();
   const rawEnv = process.env.HF_DE_VERIFY_MIN_DB;
   if (rawEnv !== undefined && Number(rawEnv) !== verifyMinDb) {
     log.warn(`[Render] HF_DE_VERIFY_MIN_DB out of range [10,60]; using ${verifyMinDb}`, {
       raw: rawEnv,
+    });
+  }
+  const rawShiftEnv = process.env.HF_DE_VERIFY_MAX_SHIFT;
+  if (rawShiftEnv !== undefined && verifyMaxShift === undefined) {
+    log.warn("[Render] HF_DE_VERIFY_MAX_SHIFT out of range [1,64]; shift gate stays observe-only", {
+      raw: rawShiftEnv,
     });
   }
   const sizes: number[] = [];
@@ -421,8 +435,9 @@ function createDrainFrameGuard(args: {
     const truth = session.deVerifyFrames?.get(idx);
     if (truth) {
       let db: number;
+      let shift: number;
       try {
-        db = await psnrDb(buf, truth);
+        [db, shift] = await Promise.all([psnrDb(buf, truth), regionShift(buf, truth)]);
       } catch (err) {
         // Infrastructure failure (ffmpeg spawn/parse/tmpdir), not evidence of
         // damage — skip this sample rather than failing or falling back.
@@ -432,7 +447,7 @@ function createDrainFrameGuard(args: {
         });
         return buf;
       }
-      if (db < verifyMinDb) {
+      if (db < verifyMinDb || (verifyMaxShift !== undefined && shift > verifyMaxShift)) {
         // Keep the mismatched pair for diagnosis (tmpdir; OS-reaped).
         const dumpDir = await mkdtemp(join(tmpdir(), "hf-de-verify-fail-")).catch(() => null);
         if (dumpDir) {
@@ -441,16 +456,27 @@ function createDrainFrameGuard(args: {
             writeFile(join(dumpDir, `frame-${idx}-truth.jpg`), truth),
           ]).catch(() => {});
         }
+        if (db < verifyMinDb) {
+          throw new DrawElementVerificationError(
+            `drawElement self-verify failed at frame ${idx}: ${db.toFixed(1)}dB < ${verifyMinDb}dB vs pre-injection screenshot${dumpDir ? ` (pair: ${dumpDir})` : ""}`,
+            { kind: "psnr", frameIndex: idx, failedDb: db, verifyThresholdDb: verifyMinDb },
+          );
+        }
         throw new DrawElementVerificationError(
-          `drawElement self-verify failed at frame ${idx}: ${db.toFixed(1)}dB < ${verifyMinDb}dB vs pre-injection screenshot${dumpDir ? ` (pair: ${dumpDir})` : ""}`,
-          { kind: "psnr", frameIndex: idx, failedDb: db, verifyThresholdDb: verifyMinDb },
+          `drawElement self-verify failed at frame ${idx}: region shift ${shift}/255 > ${verifyMaxShift}/255 vs pre-injection screenshot; a low-contrast region is absent from the drawElement frame${dumpDir ? ` (pair: ${dumpDir})` : ""}`,
+          { kind: "shift", frameIndex: idx, failedShift: shift, verifyMaxShift },
         );
       }
       stats.verifyChecked += 1;
       stats.verifyMinDb = stats.verifyMinDb === undefined ? db : Math.min(stats.verifyMinDb, db);
+      stats.verifyMaxShiftObserved =
+        stats.verifyMaxShiftObserved === undefined
+          ? shift
+          : Math.max(stats.verifyMaxShiftObserved, shift);
       log.info("[Render] drawElement self-verify passed", {
         frame: idx,
         psnrDb: db === Infinity ? "inf" : Number(db.toFixed(1)),
+        regionShift: shift,
       });
     }
     return buf;

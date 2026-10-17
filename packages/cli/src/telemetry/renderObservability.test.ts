@@ -105,6 +105,29 @@ describe("renderObservabilityTelemetryPayload — DE inversion/router cohort (fa
     expect(payload.captureDeFallbackFrameIndex).toBeUndefined();
     expect(payload.captureDeFallbackThresholdDb).toBeUndefined();
   });
+
+  it("carries the failing shift and max-shift ceiling for a region-shift fallback, still visible on a hard failure", () => {
+    const payload = renderObservabilityTelemetryPayload(
+      makeSummary({
+        deParallelRouter: "routed",
+        deFallbackReason: "shift",
+        deFallbackFrameIndex: 45,
+        deFallbackFailedShift: 6,
+        deFallbackMaxShift: 3,
+      }),
+    );
+    expect(payload.captureDeFallbackFailedShift).toBe(6);
+    expect(payload.captureDeFallbackMaxShift).toBe(3);
+    expect(payload.captureDeFallbackFailedDb).toBeUndefined();
+  });
+
+  it("leaves failedShift/maxShift undefined for a psnr fallback (no shift score exists)", () => {
+    const payload = renderObservabilityTelemetryPayload(
+      makeSummary({ deFallbackReason: "psnr", deFallbackFailedDb: 28.4 }),
+    );
+    expect(payload.captureDeFallbackFailedShift).toBeUndefined();
+    expect(payload.captureDeFallbackMaxShift).toBeUndefined();
+  });
 });
 
 describe("renderObservabilityTelemetryPayload — non-DE parallel-stream router", () => {

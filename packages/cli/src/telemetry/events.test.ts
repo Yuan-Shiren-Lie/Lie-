@@ -982,6 +982,59 @@ describe("render telemetry events", () => {
     );
   });
 
+  it("carries the failing region shift and max-shift ceiling on render_complete for a shift fallback", () => {
+    trackRenderComplete({
+      durationMs: 1000,
+      fps: 30,
+      quality: "standard",
+      docker: false,
+      gpu: false,
+      deParallelRouter: "routed",
+      deFallbackReason: "shift",
+      deFallbackFrameIndex: 45,
+      deFallbackFailedShift: 6,
+      deFallbackMaxShift: 3,
+    });
+
+    expect(trackEvent).toHaveBeenCalledWith(
+      "render_complete",
+      expect.objectContaining({
+        de_fallback_reason: "shift",
+        de_fallback_frame_index: 45,
+        de_fallback_failed_shift: 6,
+        de_fallback_max_shift: 3,
+        de_fallback_failed_db: undefined,
+      }),
+      undefined,
+    );
+  });
+
+  it("carries capture-observability-sourced shift fields on render_error", () => {
+    trackRenderError({
+      fps: 30,
+      quality: "standard",
+      docker: false,
+      errorMessage: "worker crashed after a shift fallback",
+      captureDeParallelRouter: "routed",
+      captureDeSelfVerifyFallback: true,
+      captureDeFallbackReason: "shift",
+      captureDeFallbackFrameIndex: 45,
+      captureDeFallbackFailedShift: 6,
+      captureDeFallbackMaxShift: 3,
+    });
+
+    expect(trackEvent).toHaveBeenCalledWith(
+      "render_error",
+      expect.objectContaining({
+        de_fallback_reason: "shift",
+        de_fallback_frame_index: 45,
+        de_fallback_failed_shift: 6,
+        de_fallback_max_shift: 3,
+      }),
+      undefined,
+    );
+  });
+
   it("emits render_preflight_rejected with the low-cardinality issue kind", () => {
     trackRenderPreflightRejected({ kind: "aspect-mismatch" });
     expect(trackEvent).toHaveBeenCalledWith("render_preflight_rejected", {
