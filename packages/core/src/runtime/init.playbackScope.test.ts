@@ -190,6 +190,20 @@ describe("a playing frame's scope", () => {
     expect(quietFrames).toBeGreaterThan(20);
   });
 
+  it("shows a clip on the next frame when its timing moves it onto the playhead mid-play", async () => {
+    mountFilm();
+    window.__player!.play();
+    while (window.__player!.getTime() < 5) frames(1);
+    const moved = document.getElementById("e")!;
+    const stretched = document.getElementById("a")!;
+    expect([moved.style.visibility, stretched.style.visibility]).toEqual(["hidden", "hidden"]);
+    moved.setAttribute("data-start", "4");
+    stretched.setAttribute("data-duration", "19");
+    await Promise.resolve();
+    frames(1);
+    expect([moved.style.visibility, stretched.style.visibility]).toEqual(["visible", "visible"]);
+  });
+
   it("leaves a scene that ended alone while the film plays on, after resting it at its end once", () => {
     const scene = countingTimeline(8);
     document.body.innerHTML =
