@@ -29,6 +29,8 @@ export type MediaCodecMapEntry = {
   /** Source carries an alpha channel and therefore needs a VP8/WebM proxy.
    * Optional so pre-alpha-aware maps stay assignable; absent means "no alpha detected". */
   hasAlpha?: boolean;
+  /** Browser-safe, but keyframes are more than 2 s apart, so each jump decodes far. */
+  seekHostile?: boolean;
 };
 
 declare global {
@@ -411,7 +413,10 @@ export function maybeProxyProactively(el: HTMLMediaElement): void {
 export function handleMetadataForProxy(el: HTMLMediaElement): void {
   if (isRenderMode(el)) return;
   if (!isVideoElement(el)) return;
-  if (el.videoWidth !== 0) return;
+  if (el.videoWidth !== 0) {
+    maybeProxyForSeeking(el);
+    return;
+  }
   const src = currentSrcValue(el);
   if (swappedElements.has(el)) {
     emitUnavailableDiagnostic(el, "proxy_playback_failed", src);
@@ -430,6 +435,40 @@ export function handleMetadataForProxy(el: HTMLMediaElement): void {
     return;
   }
   swapToProxy(el, entry, "reactive");
+}
+
+// One seek copy is asked for at a time, so many sparse clips never poll the server together.
+let seekCopyQueue: Promise<void> = Promise.resolve();
+
+/** A seek-hostile video shown smaller than its source gets a copy at the shown size. Nothing waits
+ * on it: jumps run on the original until the copy is served, then it swaps in while paused. */
+function maybeProxyForSeeking(el: HTMLMediaElement): void {
+  const map = window.__HF_MEDIA_CODEC_MAP__;
+  if (!map || swappedElements.has(el)) return;
+  const key = deriveCodecMapKey(el);
+  const entry = key === null ? null : lookupCodecMapEntry(key, map);
+  if (!entry?.seekHostile || entry.browserHostile) return;
+  const originalAttr = el.getAttribute("src");
+  if (proxyRequested.has(el) && proxyRequested.get(el) === originalAttr) return;
+  proxyRequested.set(el, originalAttr);
+  const originalSrc = currentSrcValue(el);
+  const live = () => el.isConnected && el.getAttribute("src") === originalAttr;
+  seekCopyQueue = seekCopyQueue
+    .then(async () => {
+      const scale = await shownScale();
+      const box = scale === null ? null : shownBox(el, scale);
+      if (!box || box.width >= el.videoWidth || box.height >= el.videoHeight) return;
+      const href = appendProxyParam(originalSrc, "h264", box);
+      if (!(await waitForServedProxy(href, live))) return;
+      const swap = () => {
+        if (!live()) return;
+        swappedElements.set(el, originalAttr);
+        loadProxy(el, href, originalSrc, "h264", box);
+      };
+      if (el.paused) swap();
+      else el.addEventListener("pause", swap, { once: true });
+    })
+    .catch((err) => swallow("runtime.mediaProxy.seekCopy", err));
 }
 
 /**

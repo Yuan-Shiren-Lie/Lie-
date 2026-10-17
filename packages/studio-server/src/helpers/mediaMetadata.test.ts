@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { classifyMediaColor, pixelFormatHasAlpha, probeMediaMetadata } from "./mediaMetadata.js";
+import {
+  classifyMediaColor,
+  pixelFormatHasAlpha,
+  probeKeyframeGap,
+  probeMediaMetadata,
+} from "./mediaMetadata.js";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -173,6 +178,21 @@ describe("probeMediaMetadata", () => {
       stderr: "",
     }));
     expect(metadata).toMatchObject({ kind: "video", color: { codecName: "h264" } });
+  });
+});
+
+describe("probeKeyframeGap", () => {
+  const packets = (stdout: string) => async () => ({ status: 0, stdout, stderr: "" });
+
+  it("measures the longest stretch between keyframes, including the one after the last", async () => {
+    const stdout = "0.000000,K__\n0.033333,___\n8.000000,K__\nN/A,___\n19.966667,___\n";
+    await expect(probeKeyframeGap("/tmp/clip.mp4", packets(stdout))).resolves.toBeCloseTo(11.97);
+  });
+
+  it("is null when ffprobe fails or reports no keyframe", async () => {
+    await expect(probeKeyframeGap("/tmp/clip.mp4", packets("0.0,___\n"))).resolves.toBeNull();
+    const failed = async () => ({ status: 1, stdout: "0.0,K__\n", stderr: "" });
+    await expect(probeKeyframeGap("/tmp/clip.mp4", failed)).resolves.toBeNull();
   });
 });
 
