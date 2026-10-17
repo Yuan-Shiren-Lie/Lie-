@@ -330,6 +330,7 @@
       "name": "@hyperframes/shader-transitions",
       "version": "0.8.150",
       "dependencies": {
+        "@hyperframes/core": "workspace:*",
         "html2canvas": "^1.4.1",
       },
       "devDependencies": {

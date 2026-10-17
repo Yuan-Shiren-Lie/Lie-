@@ -41,6 +41,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@hyperframes/core": "workspace:*",
     "html2canvas": "^1.4.1"
   },
   "devDependencies": {

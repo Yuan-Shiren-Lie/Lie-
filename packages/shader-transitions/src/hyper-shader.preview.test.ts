@@ -80,6 +80,32 @@ function visibilityOf(ids: string[]): string[] {
 }
 
 describe("preview outside a transition", () => {
+  it("settles runtime filter gates when its live CSS fallback reveals marked scenes", async () => {
+    stubGsap();
+    stubWebGl();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mountScenes(["s4", "s5"]);
+    const timeline = init({
+      bgColor: "#000",
+      scenes: ["s4", "s5"],
+      transitions: [{ time: 4.4, duration: 0.8, shader: "domain-warp" }],
+    });
+    await prewarmDone();
+    const finishes = ["s4", "s5"].map((id) => {
+      const scene = document.getElementById(id)!;
+      scene.style.visibility = "hidden";
+      scene.setAttribute("data-hf-clip-hidden", "");
+      const gate = { transitionProperty: "filter", effect: { target: scene }, finish: vi.fn() };
+      Object.defineProperty(scene, "getAnimations", {
+        value: vi.fn().mockReturnValueOnce([]).mockReturnValue([gate]),
+      });
+      return gate.finish;
+    });
+    timeline.time(4.5);
+    expect(visibilityOf(["s4", "s5"])).toEqual(["visible", "visible"]);
+    for (const finish of finishes) expect(finish).toHaveBeenCalledOnce();
+  });
+
   it("leaves the runtime's hide on shader scenes after the prewarm on a paused page", async () => {
     stubGsap();
     stubWebGl();

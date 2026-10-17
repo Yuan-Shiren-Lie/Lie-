@@ -1,3 +1,4 @@
+import { setTimedClipPaintVisibility } from "@hyperframes/core/runtime/timed-clip-hide";
 import {
   createContext,
   setupQuad,
@@ -1002,7 +1003,7 @@ export function init(config: HyperShaderConfig): GsapTimeline {
 
   const setScenePlaybackState = (scene: HTMLElement, visible: boolean, opacity: string): void => {
     setSceneLayer(scene, visible, opacity);
-    scene.style.visibility = visible ? "visible" : "hidden";
+    setTimedClipPaintVisibility(scene, visible ? "visible" : "hidden");
   };
 
   const paintScenePairState = (
