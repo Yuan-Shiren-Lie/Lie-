@@ -75,7 +75,7 @@ if (["allocation", "write", "spawn-throw"].includes(mode)) {
   assert.equal(fs.existsSync(wavAbs), false);
 } else if (mode === "concurrent") {
   const slowWav = join(project, "slow.wav");
-  const slow = request("elevenlabs", "slow", slowWav);
+  const slow = request("kokoro", "slow", slowWav);
   try {
     const deadline = Date.now() + 5000;
     while (!fs.existsSync(slowWav + ".started")) {
@@ -93,7 +93,7 @@ if (["allocation", "write", "spawn-throw"].includes(mode)) {
   assert.equal(fs.readFileSync(slowWav, "utf8"), "slow");
 } else {
   const result = await request();
-  const label = provider === "elevenlabs" ? "elevenlabs (python)" : "kokoro (npx hyperframes tts)";
+  const label = "kokoro (npx hyperframes tts)";
   if (["nonzero", "enoent", "no-output"].includes(mode)) {
     const error = mode === "no-output" ? label + " produced no wav file" :
       label + " exited with status " + (mode === "enoent" ? -1 : 7);
@@ -149,7 +149,7 @@ function runCase(provider, mode) {
   }
 }
 
-for (const provider of ["elevenlabs", "kokoro"]) {
+for (const provider of ["kokoro"]) {
   for (const mode of [
     "success",
     "nonzero",

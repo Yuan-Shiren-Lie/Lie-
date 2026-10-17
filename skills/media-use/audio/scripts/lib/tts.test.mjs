@@ -1,21 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-  chmodSync,
-  rmSync,
-  existsSync,
-} from "node:fs";
-import { join, dirname } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   parseFfmpegDurationBanner,
   ffprobeDuration,
   synthesizeOne,
   synthesizeHeygen,
+  synthesizeElevenLabs,
+  elevenlabsWords,
   synthResult,
   pickProvider,
 } from "./tts.mjs";
@@ -80,27 +74,142 @@ test("ffprobeDuration returns NaN when neither ffprobe nor ffmpeg resolve", () =
   }
 });
 
-test("synthesizeOne(elevenlabs) creates the output dir before writing", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "tts-el-mkdir-"));
-  const wavAbs = join(dir, "assets", "voice", "line-0.wav"); // nested, not yet created
-  const savedKey = process.env.ELEVENLABS_API_KEY;
+function alignmentFor(text, step = 0.05) {
+  const chars = [...text];
+  return {
+    characters: chars,
+    character_start_times_seconds: chars.map((_, k) => k * step),
+    character_end_times_seconds: chars.map((_, k) => (k + 1) * step),
+  };
+}
+
+function elevenlabsResponse(text, status = 200) {
+  return {
+    ok: status === 200,
+    status,
+    text: async () => (status === 200 ? "" : `{"detail":"language_code not supported"}`),
+    json: async () => ({
+      audio_base64: Buffer.from("mp3").toString("base64"),
+      alignment: alignmentFor(text),
+    }),
+  };
+}
+
+async function withElevenLabsKey(run) {
+  const saved = process.env.ELEVENLABS_API_KEY;
+  const savedModel = process.env.ELEVENLABS_MODEL_ID;
+  process.env.ELEVENLABS_API_KEY = "test-key";
+  delete process.env.ELEVENLABS_MODEL_ID;
   try {
-    // Unset the key so the Python side fails fast — the mkdir must run before
-    // the spawn regardless, which is what this guards.
-    delete process.env.ELEVENLABS_API_KEY;
-    await synthesizeOne({
+    return await run();
+  } finally {
+    if (saved === undefined) delete process.env.ELEVENLABS_API_KEY;
+    else process.env.ELEVENLABS_API_KEY = saved;
+    if (savedModel !== undefined) process.env.ELEVENLABS_MODEL_ID = savedModel;
+  }
+}
+
+test("elevenlabsWords keeps audio tags out of the word timings", () => {
+  const words = elevenlabsWords(alignmentFor("[slightly wry] It worked."));
+  assert.deepEqual(
+    words.map((w) => w.text),
+    ["It", "worked."],
+  );
+  assert.equal(words[0].start, 15 * 0.05);
+  assert.equal(words[1].end, 25 * 0.05);
+});
+
+test("synthesizeElevenLabs calls /with-timestamps with eleven_v4 and returns native words", async () => {
+  const calls = [];
+  const fetch = async (url, init) => {
+    calls.push({ url, body: JSON.parse(init.body), key: init.headers["xi-api-key"] });
+    return elevenlabsResponse("[warm] Built in Rust.");
+  };
+  let transcoded = null;
+  const transcodeToWav = (bytes, dest) => ((transcoded = { bytes: String(bytes), dest }), true);
+  const res = await withElevenLabsKey(() =>
+    synthesizeElevenLabs(
+      { text: "[warm] Built in Rust.", voiceId: "voice/1", lang: "es", wavAbs: "/x/line.wav" },
+      { fetch, transcodeToWav },
+    ),
+  );
+  assert.equal(res.ok, true);
+  assert.deepEqual(
+    res.words.map((w) => w.text),
+    ["Built", "in", "Rust."],
+  );
+  assert.match(calls[0].url, /\/text-to-speech\/voice%2F1\/with-timestamps\?/);
+  assert.deepEqual(calls[0].body, {
+    text: "[warm] Built in Rust.",
+    model_id: "eleven_v4",
+    language_code: "es",
+  });
+  assert.equal(calls[0].key, "test-key");
+  assert.deepEqual(transcoded, { bytes: "mp3", dest: "/x/line.wav" });
+});
+
+test("synthesizeElevenLabs honors an explicit model and retries without a rejected language_code", async () => {
+  const bodies = [];
+  const fetch = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    bodies.push(body);
+    return elevenlabsResponse("Hola.", body.language_code ? 400 : 200);
+  };
+  const res = await withElevenLabsKey(() =>
+    synthesizeElevenLabs(
+      { text: "Hola.", voiceId: "v", lang: "es", model: "eleven_flash_v2", wavAbs: "/x/a.wav" },
+      { fetch, transcodeToWav: () => true },
+    ),
+  );
+  assert.equal(res.ok, true);
+  assert.deepEqual(bodies, [
+    { text: "Hola.", model_id: "eleven_flash_v2", language_code: "es" },
+    { text: "Hola.", model_id: "eleven_flash_v2" },
+  ]);
+});
+
+test("synthesizeElevenLabs writes mp3 output into a fresh directory", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "tts-el-mp3-"));
+  try {
+    const out = join(dir, "assets", "voice", "line.mp3");
+    const res = await withElevenLabsKey(() =>
+      synthesizeElevenLabs(
+        { text: "Hi.", voiceId: "v", wavAbs: out },
+        { fetch: async () => elevenlabsResponse("Hi.") },
+      ),
+    );
+    assert.equal(res.ok, true);
+    assert.equal(readFileSync(out, "utf8"), "mp3");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("synthesizeElevenLabs reports a missing key and HTTP failures", async () => {
+  const saved = process.env.ELEVENLABS_API_KEY;
+  delete process.env.ELEVENLABS_API_KEY;
+  try {
+    const res = await synthesizeOne({
       provider: "elevenlabs",
       text: "hi",
       voiceId: "v",
-      wavAbs,
-      hyperframesDir: dir,
+      wavAbs: "/x/a.wav",
     });
-    assert.ok(existsSync(dirname(wavAbs)), "output directory should be created");
+    assert.deepEqual(res, { ok: false, words: null, error: "$ELEVENLABS_API_KEY is not set" });
   } finally {
-    if (savedKey === undefined) delete process.env.ELEVENLABS_API_KEY;
-    else process.env.ELEVENLABS_API_KEY = savedKey;
-    rmSync(dir, { recursive: true, force: true });
+    if (saved !== undefined) process.env.ELEVENLABS_API_KEY = saved;
   }
+  const res = await withElevenLabsKey(() =>
+    synthesizeElevenLabs(
+      { text: "hi", voiceId: "v", wavAbs: "/x/a.wav" },
+      { fetch: async () => ({ ok: false, status: 401, text: async () => "invalid_api_key" }) },
+    ),
+  );
+  assert.deepEqual(res, {
+    ok: false,
+    words: null,
+    error: "ElevenLabs eleven_v4 HTTP 401: invalid_api_key",
+  });
 });
 
 test("synthesizeHeygen surfaces a thrown HTTP error (e.g. 402) instead of swallowing it", async () => {

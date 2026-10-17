@@ -1,7 +1,7 @@
 // python.mjs — resolve which Python 3 executable to spawn, per platform.
 //
-// The audio engine (tts.mjs, bgm.mjs) shells out to `python3` for ElevenLabs
-// TTS and the local Lyria/MusicGen BGM paths. `python3` is the right name on
+// The audio engine (bgm.mjs, gemini-auth.mjs) shells out to `python3` for the
+// local Lyria/MusicGen BGM paths and Gemini service-account auth. `python3` is the right name on
 // macOS/Linux, but on Windows the python.org installer only creates
 // `python.exe` plus the `py` launcher — there is no `python3.exe` (only the
 // Microsoft Store build adds one). So a bare `spawn("python3", …)` ENOENTs on a

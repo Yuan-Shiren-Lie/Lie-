@@ -6,8 +6,9 @@ import { fetchMedia } from "../../../scripts/lib/media-fetch.mjs";
 //        Direct v3 REST (NOT `hyperframes tts`, which in the published build is
 //        Kokoro-only and silently ignores a HeyGen key). Returns word_timestamps
 //        in the same call, so no separate transcribe pass.
-//   2. ElevenLabs         — $ELEVENLABS_API_KEY + `pip install elevenlabs`. No
-//        word timings → caller chains transcribeWav().
+//   2. ElevenLabs         — $ELEVENLABS_API_KEY. Direct REST to /with-timestamps
+//        (default model eleven_v4); character alignment gives word timings in
+//        the same call, so no separate transcribe pass.
 //   3. Kokoro-82M (local) — always available, via the published `hyperframes tts`
 //        CLI. No word timings → caller chains transcribeWav().
 //
@@ -19,7 +20,6 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { heygenAuthHeaders, heygenCredential, heygenJSON, heygenMessage } from "./heygen.mjs";
-import { pythonInvocation } from "./python.mjs";
 import { synthesizeGemini } from "./gemini-tts.mjs";
 import { geminiConfigured } from "./gemini-auth.mjs";
 
@@ -28,12 +28,7 @@ export function heygenAvailable() {
   return heygenCredential() !== null;
 }
 export function elevenlabsAvailable() {
-  if (!process.env.ELEVENLABS_API_KEY) return false;
-  const { cmd, args } = pythonInvocation(["-c", "import elevenlabs"]);
-  const r = spawnSync(cmd, args, {
-    stdio: "ignore",
-  });
-  return r.status === 0;
+  return Boolean(process.env.ELEVENLABS_API_KEY);
 }
 
 // First available provider wins; an explicit choice is honored (and validated).
@@ -229,23 +224,91 @@ function transcodeToWav(bytes, destWav) {
   return ff.status === 0 && existsSync(destWav);
 }
 
-const ELEVENLABS_PY = `
-import os, sys
-from elevenlabs.client import ElevenLabs
-from elevenlabs import save
-client = ElevenLabs(api_key=os.environ["ELEVENLABS_API_KEY"])
-text = open(sys.argv[1], encoding="utf-8").read()
-audio = client.text_to_speech.convert(
-    text=text, voice_id=sys.argv[2],
-    model_id="eleven_multilingual_v2", output_format="mp3_44100_128",
-)
-save(audio, sys.argv[3])
-`;
+export const ELEVENLABS_DEFAULT_MODEL = "eleven_v4";
+const ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech";
+
+// Character alignment → [{text,start,end}]. Audio tags such as [warm] are voiced
+// as delivery cues but are not words, so they are dropped from the timings.
+export function elevenlabsWords(alignment) {
+  const chars = alignment?.characters ?? [];
+  const starts = alignment?.character_start_times_seconds ?? [];
+  const ends = alignment?.character_end_times_seconds ?? [];
+  const words = [];
+  let cur = null;
+  let inTag = false;
+  chars.forEach((ch, k) => {
+    if (ch === "[") inTag = true;
+    const gap = inTag || /\s/.test(ch);
+    if (ch === "]") inTag = false;
+    if (gap) {
+      if (cur) words.push(cur);
+      cur = null;
+      return;
+    }
+    if (!isFinite(starts[k]) || !isFinite(ends[k])) return;
+    if (cur) {
+      cur.text += ch;
+      cur.end = ends[k];
+    } else cur = { text: ch, start: starts[k], end: ends[k] };
+  });
+  if (cur) words.push(cur);
+  return words;
+}
+
+export async function synthesizeElevenLabs({ text, voiceId, lang, model, wavAbs }, deps = {}) {
+  const fetchImpl = deps.fetch ?? fetch;
+  const transcode = deps.transcodeToWav ?? transcodeToWav;
+  const key = process.env.ELEVENLABS_API_KEY;
+  if (!key) return { ok: false, words: null, error: "$ELEVENLABS_API_KEY is not set" };
+  const modelId = model || process.env.ELEVENLABS_MODEL_ID || ELEVENLABS_DEFAULT_MODEL;
+  const url = `${ELEVENLABS_TTS_URL}/${encodeURIComponent(voiceId)}/with-timestamps?output_format=mp3_44100_128`;
+  const post = (body) =>
+    fetchImpl(url, {
+      method: "POST",
+      headers: { "xi-api-key": key, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  try {
+    const body = { text, model_id: modelId };
+    if (lang) body.language_code = lang;
+    let res = await post(body);
+    let detail = res.ok ? "" : await res.text();
+    // Some models reject language_code; the text alone still sets the language.
+    if (!res.ok && res.status === 400 && body.language_code && /language/i.test(detail)) {
+      delete body.language_code;
+      res = await post(body);
+      detail = res.ok ? "" : await res.text();
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        words: null,
+        error: `ElevenLabs ${modelId} HTTP ${res.status}: ${detail.slice(0, 200)}`,
+      };
+    }
+    const payload = await res.json();
+    if (!payload.audio_base64) {
+      return { ok: false, words: null, error: "ElevenLabs /with-timestamps returned no audio" };
+    }
+    const bytes = Buffer.from(payload.audio_base64, "base64");
+    if (wavAbs.endsWith(".wav")) {
+      if (!transcode(bytes, wavAbs)) {
+        return { ok: false, words: null, error: "wav transcode failed (ffmpeg)" };
+      }
+    } else {
+      mkdirSync(dirname(wavAbs), { recursive: true });
+      writeFileSync(wavAbs, bytes);
+    }
+    return { ok: true, words: elevenlabsWords(payload.alignment ?? payload.normalized_alignment) };
+  } catch (e) {
+    return { ok: false, words: null, error: `ElevenLabs request failed: ${e?.message ?? e}` };
+  }
+}
 
 // ── synthesize one line ───────────────────────────────────────────────────────
 // Writes wav at wavAbs. Returns { ok, words, error } — words is the raw
-// [{text,start,end}] array for HeyGen (native), or null for ElevenLabs/Kokoro
-// (caller must transcribeWav). Never throws; failures return { ok:false, error }
+// [{text,start,end}] array for HeyGen and ElevenLabs (native), or null for
+// Kokoro/Gemini (caller must transcribeWav). Never throws; failures return { ok:false, error }
 // where `error` states WHY (so the caller can surface it, not a bare "TTS failed").
 export async function synthesizeOne({
   provider,
@@ -261,25 +324,8 @@ export async function synthesizeOne({
   if (provider === "heygen") return synthesizeHeygen({ text, voiceId, lang, speed, wavAbs });
   if (provider === "gemini")
     return synthesizeGemini({ text, voiceId, model, style, speed, wavAbs });
-  if (provider === "elevenlabs") {
-    // The Python helper writes straight to wavAbs; unlike heygen (transcodeToWav)
-    // and kokoro (the `hyperframes tts` CLI), it does NOT create the parent dir,
-    // so on a fresh project (no assets/voice/ yet) the save fails and the line is
-    // silently dropped as "TTS failed - omitted". Create it first, like the other
-    // providers do. Guarded so a mkdir failure (EACCES/EROFS) returns
-    // { ok:false } like the rest of this branch rather than throwing (the
-    // function's contract is "never throws; failures return { ok:false }").
-    try {
-      mkdirSync(dirname(wavAbs), { recursive: true });
-    } catch {
-      return { ok: false, words: null };
-    }
-    return withTmpText(text, async (textPath) => {
-      const { cmd, args } = pythonInvocation(["-c", ELEVENLABS_PY, textPath, voiceId, wavAbs]);
-      const r = await spawnP(cmd, args, {});
-      return synthResult(r, wavAbs, "elevenlabs (python)");
-    });
-  }
+  if (provider === "elevenlabs")
+    return synthesizeElevenLabs({ text, voiceId, lang, model, wavAbs });
   // kokoro — via the published CLI; --output is relative to the project dir.
   const wavRel = relTo(hyperframesDir, wavAbs);
   return withTmpText(text, async (textPath) => {
@@ -352,7 +398,7 @@ export async function synthesizeHeygen({ text, voiceId, lang, speed, wavAbs }, d
   }
 }
 
-// ElevenLabs/Kokoro have no word timings — run Whisper over the wav. Returns the
+// Kokoro/Gemini have no word timings — run Whisper over the wav. Returns the
 // flat [{id,text,start,end}] word array, or null. Each call uses a throwaway
 // --dir so parallel scenes don't collide on transcript.json.
 export async function transcribeWav({ wavRel, lang = "en", hyperframesDir }) {

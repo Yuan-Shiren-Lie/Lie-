@@ -166,7 +166,7 @@ if (only.has("tts") && lines.length) {
       anomalies.push(`line ${id}: TTS failed — omitted${error ? ` (${error})` : ""}`);
       return null;
     }
-    let wordArr = words; // heygen: native; else transcribe
+    let wordArr = words; // heygen/elevenlabs: native; else transcribe
     if (!wordArr) wordArr = await transcribeWav({ wavRel: rel, lang, hyperframesDir });
     const dur = ffprobeDuration(abs);
     if (!isFinite(dur) || dur <= 0) {

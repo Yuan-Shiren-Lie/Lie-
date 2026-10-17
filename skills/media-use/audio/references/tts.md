@@ -33,6 +33,8 @@ re-voiced. If you cannot reach ElevenLabs, say so and stop rather than
 substituting a different voice.
 
 Use another voice only for a documented reason, and write the reason down.
+This pin applies only to docs-site films. Elsewhere, the audio engine's
+ElevenLabs adapter defaults to `eleven_v4` (see [ElevenLabs narration](#elevenlabs-narration)).
 
 ## Available routes
 
@@ -43,7 +45,7 @@ to HeyGen sign-in. Read the Gemini section for its credential requirement.
 | Order | Provider          | Env trigger                                                          | Voice IDs                                                                                  | Word timestamps                           | Audio format         |
 | ----- | ----------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ----------------------------------------- | -------------------- |
 | 1     | HeyGen (Starfish) | `$HEYGEN_ACCESS_TOKEN` / `$HEYGEN_API_KEY` / `~/.heygen/credentials` | UUIDs from `GET /v3/voices?engine=starfish`, or your cloned voice ids (`heygen-voice.mjs`) | **Yes** (`word_timestamps[]` in response) | mp3 → wav via ffmpeg |
-| 2     | ElevenLabs        | `$ELEVENLABS_API_KEY`                                                | UUIDs from elevenlabs.io dashboard                                                         | No                                        | mp3 → wav via ffmpeg |
+| 2     | ElevenLabs        | `$ELEVENLABS_API_KEY`                                                | UUIDs from elevenlabs.io dashboard                                                         | **Yes** (`/with-timestamps`)              | mp3 → wav via ffmpeg |
 | 3     | Kokoro-82M        | always (local fallback)                                              | `am_michael`, `af_heart`, … (54 voices)                                                    | No                                        | wav direct           |
 
 ```bash
@@ -107,10 +109,25 @@ node skills/media-use/audio/scripts/heygen-voice.mjs delete <voice_id>
 | Goal                                                      | Use                                                       |
 | --------------------------------------------------------- | --------------------------------------------------------- |
 | Best voice quality + word timestamps in one call          | **HeyGen**                                                |
-| Drop-in cloud TTS, big voice catalog                      | **ElevenLabs**                                            |
+| Big voice catalog + word timestamps in one call           | **ElevenLabs**                                            |
 | Offline, no API key, fast iteration                       | **Kokoro**                                                |
 | Directed delivery with Gemini prebuilt or custom voices   | **Gemini** (explicit selection; transcription for timing) |
 | Non-English multilingual with deterministic phonemization | **Kokoro** (`ef_dora`, `jf_alpha`, `zf_xiaobei`, …)       |
+
+## ElevenLabs narration
+
+The shared audio engine calls `POST /v1/text-to-speech/{voice_id}/with-timestamps`
+directly (no Python SDK) and builds `voices[].words` from the returned
+character alignment, so no transcription pass runs.
+
+- **Model:** `eleven_v4` by default. Override it with `--tts-model`,
+  `tts_model` in the request, or `$ELEVENLABS_MODEL_ID`.
+- **Language:** the request's `lang` is sent as `language_code`. If a model
+  rejects it, the adapter retries once without it.
+- **Delivery:** `eleven_v4` reads lowercase audio tags such as `[warm]` or
+  `[curious]` as delivery cues. Use at most one per line. Tags are kept out of
+  `words[]`, so captions never show them. `eleven_v4` ignores `speed`; pace
+  the script with sentence length and punctuation.
 
 ## Gemini narration
 
@@ -257,4 +274,4 @@ When `--words <path>` is passed to a HeyGen call, the file is written in the sam
 ]
 ```
 
-For ElevenLabs / Kokoro, run `npx hyperframes transcribe narration.wav --model small.en` to get the same shape.
+ElevenLabs returns the same shape through the audio engine. For Kokoro, run `npx hyperframes transcribe narration.wav --model small.en` to get it.
