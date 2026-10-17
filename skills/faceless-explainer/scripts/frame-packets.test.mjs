@@ -60,7 +60,7 @@ test("packet validation is atomic and leaves no partial output on overflow", () 
 
   assert.throws(
     () => buildFramePackets({ projectDir: project, outDir, maxPacketBytes: 2_000 }),
-    /limit 2000/,
+    /limit 2000\); largest parts: storyboard block \(\d+\)/,
   );
   assert.equal(existsSync(outDir), false);
 });

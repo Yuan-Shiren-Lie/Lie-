@@ -133,10 +133,31 @@ export function buildFramePackets({
   const packets = frames.map((frame) => {
     const id = frameId(frame);
     if (validateFrame) validateFrame(frame, id);
-    const packet = `# Frame packet: ${id}\n\n## Project inputs\n\n- Project: ${resolve(projectDir)}\n${designTruthLine(projectDir)}\n- RULES_DIR: ${join(animationDir, "rules")}\n\n## Assigned storyboard block\n\n${frame.block}\n${resourceSections(frame.block, { animationDir, ruleIds, frameId: id })}${extraSections ? extraSections(frame.block) : ""}`;
+    const resources = resourceSections(frame.block, { animationDir, ruleIds, frameId: id });
+    const extra = extraSections ? extraSections(frame.block) : "";
+    const packet = `# Frame packet: ${id}\n\n## Project inputs\n\n- Project: ${resolve(projectDir)}\n${designTruthLine(projectDir)}\n- RULES_DIR: ${join(animationDir, "rules")}\n\n## Assigned storyboard block\n\n${frame.block}\n${resources}${extra}`;
     const bytes = Buffer.byteLength(packet);
     if (bytes > maxPacketBytes) {
-      throw new Error(`${id}: frame packet is ${bytes} bytes (limit ${maxPacketBytes})`);
+      // A motion rule is inlined whenever the block merely names its id, so name the
+      // heaviest parts: the fix is usually dropping one mention, not trimming prose.
+      const parts = [
+        ["storyboard block", frame.block],
+        ...resources
+          .split(/\n(?=## Selected )/)
+          .filter((s) => s.trim())
+          .map((s) => [s.trim().split("\n")[0].slice(3), s]),
+        ["extra sections", extra],
+      ];
+      const largest = parts
+        .map(([name, s]) => ({ name, size: Buffer.byteLength(s) }))
+        .filter((s) => s.size > 0)
+        .sort((a, b) => b.size - a.size)
+        .slice(0, 3)
+        .map((s) => `${s.name} (${s.size})`)
+        .join(", ");
+      throw new Error(
+        `${id}: frame packet is ${bytes} bytes (limit ${maxPacketBytes}); largest parts: ${largest}`,
+      );
     }
     return { frameId: id, path: join(outDir, `${id}.md`), bytes, packet };
   });
